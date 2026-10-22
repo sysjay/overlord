@@ -1,7 +1,7 @@
 Priority: P2
-Status: In progress
-Next action: Jay: Stage 2 secrets (env, msmtprc), then sudo ./install.sh; then Stage 6 tests
-Waiting on: Jay: secrets + install.sh
+Status: Closed
+Next action: -
+Waiting on: -
 Updated: 2026-10-22
 
 TICKET-01: overlord bootstrap - sysai account, collectors, daily AI health report,
@@ -199,3 +199,25 @@ STAGE 6: INSTALL, SCHEDULE, FIRST RUN
 OUTPUT
   Repo pushed; the Stage 0 flag set; test results 1-5; first report's status, summary,
   cost; systems accessed and how; every sudo command Jay ran.
+
+RESULTS (closed 2026-10-22)
+  Stage 0: Claude Code 2.1.308 in Jay's home only (install.sh now copies it to
+    /usr/local/bin/claude, root-owned); msmtp and smartctl were missing
+    (install.sh installs them); sysai already existed (Jay's useradd earlier that
+    day), reused, and install.sh enforces its state; :8090 free; Python 3.10.12;
+    systemd 249. Cookie-Cam /health has no task_runs; cookiepi reports no PIR yet.
+  Flags: claude --bare -p --tools "" --strict-mcp-config --disallowedTools "mcp__*"
+    --system-prompt-file prompt.md --output-format json --verbose
+    --json-schema <schema> --max-budget-usd 0.50 --no-session-persistence
+    --permission-prompts none (timeout 600). --json-schema adds Claude Code's
+    internal StructuredOutput tool, so the tools list is ["StructuredOutput"], not
+    []; the runner makes any other tool an error.
+  Tests: 1 no secrets in collector output (slight over-redaction of go2rtc source
+    paths); 2 --x refused by sudo; 3 docker ps denied; 4 run ok, email delivered,
+    ledger line, Cookie-Cam POST 404 until cookie-cam Ticket 89; 5 site asks for
+    the login from the Mac, 401 without it, traversal and dotfiles 404.
+  First run 20261022T154816Z: status problem, $0.119, 32 s (go2rtc timeouts on
+    cookiepi RTSP in the facts).
+  Fix found in testing: msmtp's AppArmor profile denies a logfile under ~/runs;
+    the msmtprc template has no logfile.
+
