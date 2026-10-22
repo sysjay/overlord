@@ -5,7 +5,8 @@ defaults
 auth           on
 tls            on
 tls_trust_file /etc/ssl/certs/ca-certificates.crt
-logfile        ~/runs/msmtp.log
+# no logfile: Ubuntu's msmtp AppArmor profile denies writes under ~/runs, and
+# msmtp's log line already reaches the overlord journal
 
 account        gmail
 host           smtp.gmail.com
