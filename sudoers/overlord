@@ -1,0 +1,2 @@
+# overlord: sysai may run the uba5 collector as root, with no arguments ("")
+sysai ALL=(root) NOPASSWD: /usr/local/sbin/overlord-collect-uba5 ""

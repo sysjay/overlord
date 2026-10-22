@@ -1,0 +1,14 @@
+[Unit]
+Description=overlord daily home health report
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=sysai
+Group=sysai
+WorkingDirectory=/home/sysai
+ExecStart=/usr/local/lib/overlord/overlord-run.sh
+TimeoutStartSec=15min
+# no NoNewPrivileges/ProtectSystem here: the runner needs sudo for the collector
+PrivateTmp=true

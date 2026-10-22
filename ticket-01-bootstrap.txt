@@ -1,7 +1,7 @@
 Priority: P2
-Status: Not started
-Next action: Claude Code: Stage 0 read-only checks on uba5
-Waiting on: -
+Status: In progress
+Next action: Jay: Stage 2 secrets (env, msmtprc), then sudo ./install.sh; then Stage 6 tests
+Waiting on: Jay: secrets + install.sh
 Updated: 2026-10-22
 
 TICKET-01: overlord bootstrap - sysai account, collectors, daily AI health report,

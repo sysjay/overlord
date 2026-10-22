@@ -1,0 +1,17 @@
+# /home/sysai/.config/overlord/msmtprc  (owner sysai, mode 600)
+# Gmail app password: Google account -> Security -> App passwords
+# (needs 2-Step Verification). Paste it as one string, no spaces.
+defaults
+auth           on
+tls            on
+tls_trust_file /etc/ssl/certs/ca-certificates.crt
+logfile        ~/runs/msmtp.log
+
+account        gmail
+host           smtp.gmail.com
+port           587
+from           jaytcornell@gmail.com
+user           jaytcornell@gmail.com
+password       REPLACE_WITH_APP_PASSWORD
+
+account default : gmail

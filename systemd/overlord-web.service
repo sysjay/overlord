@@ -1,0 +1,25 @@
+[Unit]
+Description=overlord status site on :8090 (read only, login required)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=sysai
+Group=sysai
+EnvironmentFile=/home/sysai/.config/overlord/env
+Environment=OVERLORD_SITE=/home/sysai/site
+ExecStart=/usr/bin/python3 /usr/local/lib/overlord/overlord_web.py
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,9 @@
+[Unit]
+Description=overlord daily report at 06:30 Eastern
+
+[Timer]
+OnCalendar=*-*-* 06:30 America/New_York
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,10 @@
+{
+  "type": "object",
+  "properties": {
+    "status": {"type": "string", "enum": ["ok", "warn", "problem"]},
+    "summary": {"type": "string", "maxLength": 300},
+    "report_md": {"type": "string"}
+  },
+  "required": ["status", "summary", "report_md"],
+  "additionalProperties": false
+}
