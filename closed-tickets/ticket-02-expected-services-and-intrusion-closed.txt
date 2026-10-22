@@ -1,7 +1,7 @@
 Priority: P2
-Status: In progress
-Next action: Jay: sudo ./install.sh, then the Stage 3 checks
-Waiting on: Jay
+Status: Closed
+Next action: -
+Waiting on: -
 Updated: 2026-10-22
 
 TICKET-02: Expected services, the OTA chain (hdhr-ac4 + HDHomeRun), and intrusion
@@ -89,3 +89,21 @@ STAGE 3: VERIFY
 OUTPUT
   Files changed; selftest output; sample-data test output; the off-schedule run's
   status, summary and cost; every sudo command Jay ran.
+
+RESULTS (closed 2026-10-22)
+  Stage 0: Plex compromised 2026-10-17..22 via the 32400 port forward (planted codec
+    .so -> XMRig miner, residential proxy, botnet droppers as user plex). Jay archived
+    evidence (/root/plex-incident-*.tgz), cleaned up, removed the forward, retired
+    Plex. No sign of root access. Tuner moved .239 -> .244 (no DHCP reservation);
+    hdhr-ac4 still points at .239, so /discover.json returns 500.
+  Tests: redact selftest ok (16 secrets, 5 keeps). Sections tested with stubbed
+    commands: the attack replayed as sample data raised every flag; the quiet case
+    was clean. Bug found and fixed in testing: visitors to 6443 were counted as
+    outbound (now split by listening port).
+  Live (Jay: sudo bash ~/overlord-ticket02-verify.sh): install ok; all 7 expected
+    services active and enabled; ota shows the HDHR_IP MISMATCH; security clean
+    except PLEX IS BACK (package still installed, not running: apt purge pending).
+  Run 20261022T180036Z: status problem, $0.122, 30 s. Flagged Plex package, the
+    channel 6 mismatch, and a Cookie_Cam stall (a cookie-cam matter, not this repo).
+  Left for Jay: sudo apt purge plexmediaserver; DHCP reservation for the tuner and
+    hdhr-ac4's HDHR_IP (then update TUNER_IPS if the address changes).
