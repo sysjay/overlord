@@ -9,6 +9,7 @@ export LC_ALL=C
 
 redact() {
     perl -0777 -pe '
+        BEGIN { sub mixed { my $s = shift; length($s) >= 32 && $s =~ /[A-Z]/ && $s =~ /[a-z]/ && $s =~ /[0-9]/ } }
         # PEM blocks (keys, certificates)
         s/-----BEGIN [A-Z0-9 ]+-----.*?-----END [A-Z0-9 ]+-----/[PEM BLOCK REDACTED]/gs;
         # credentials in URLs: scheme://user:pass@ -> scheme://***@
@@ -20,8 +21,14 @@ redact() {
         s/\b([\w.-]*(?:passw(?:or)?d|passwd|_pass|pwd|token|secret|api[_-]?key|apikey|key|psk|credential|auth)\w*)(["\x27]?\s*[=:]\s*["\x27]?)([^\s"\x27,;&}]+)/$1$2***/gi;
         # long pure-hex runs (keys, digests)
         s/\b[0-9A-Fa-f]{32,}\b/[HEX REDACTED]/g;
-        # long base64-ish runs with mixed case and digits (API keys, tokens)
-        s{[A-Za-z0-9+/_=-]{32,}}{ my $t = $&; ($t =~ /[A-Z]/ && $t =~ /[a-z]/ && $t =~ /[0-9]/) ? "[KEY REDACTED]" : $t }ge;
+        # long base64-ish runs with mixed case and digits (API keys, tokens);
+        # an absolute system path is checked one segment at a time instead
+        s{[A-Za-z0-9+/_=-]{32,}}{
+            my $t = $&;
+            $t =~ m{^/(?:usr|etc|var|home|opt|snap|srv|lib|lib64|bin|sbin|run|proc|sys|dev|tmp|mnt|media|root)/}
+                ? join("/", map { mixed($_) ? "[KEY REDACTED]" : $_ } split(m{/}, $t, -1))
+                : (mixed($t) ? "[KEY REDACTED]" : $t)
+        }ge;
     '
 }
 
@@ -34,6 +41,7 @@ selftest() {
         "0123456789abcdef0123456789abcdef" "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC"
         "sk-ant-api03-AbCdEf1234567890GhIjKl1234567890MnOpQr" "qwerty789"
         "dGhpc2lzYmFzaWM6c2VjcmV0" "envpass55" "mqttpw77"
+        "Ab3dEf7hIj9kLm1nOp5qRs7tUv9wXy2zAb4c" "Qw8eRt6yUi4oPa2sDf0gHj8kLz6xCv4bNm2q"
     )
     in=$(cat <<'EOF'
 password=hunter2pass
@@ -52,6 +60,8 @@ secret = qwerty789
 Authorization: Basic dGhpc2lzYmFzaWM6c2VjcmV0
 REOLINK_PASS=envpass55
 mqtt_password: "mqttpw77"
+cache /var/lib/app/Ab3dEf7hIj9kLm1nOp5qRs7tUv9wXy2zAb4c/data
+blob /Qw8eRt6yUi4oPa2sDf0gHj8kLz6xCv4bNm2q end
 EOF
 )
     out=$(printf '%s\n' "$in" | redact)
@@ -65,6 +75,7 @@ EOF
     local keep=(
         "/usr/local/sbin/overlord-collect-uba5" "cookie-cam-python"
         "Up 3 days (healthy)" "load average: 0.52"
+        "/usr/lib/overlord/Resources/Plug-ins-4e8b05daf/Framework"
     )
     local k kept
     kept=$(printf '%s\n' "${keep[@]}" | redact)

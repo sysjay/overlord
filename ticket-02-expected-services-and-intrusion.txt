@@ -1,0 +1,91 @@
+Priority: P2
+Status: In progress
+Next action: Jay: sudo ./install.sh, then the Stage 3 checks
+Waiting on: Jay
+Updated: 2026-10-22
+
+TICKET-02: Expected services, the OTA chain (hdhr-ac4 + HDHomeRun), and intrusion
+signs on uba5
+
+FILES
+  collect/uba5.sh      systemd: expected services; new sections ota and security
+  collect/redact.sh    stop over-redacting absolute system paths (selftest samples)
+  run/prompt.md        OTA chain, expected services, intrusion signs, Plex retired
+  README.md            what overlord now checks; extra off-schedule runs
+  TICKETS.md           this ticket's row
+
+BACKGROUND (2026-10-22)
+  Plex Media Server was found stopped and overlord didn't say so (it lists only
+  *failed* units). Stage 0 then found Plex had been compromised since 2026-10-17
+  through its router port forward (32400): a planted codec .so ran shell commands as
+  user plex, which dropped an XMRig miner, residential-proxy software ("myawesomeproxy")
+  and several botnet droppers into /tmp, /var/tmp and Plex's home. uba5 was busy and
+  the LAN lagged. Jay archived the evidence (/root/plex-incident-*.tgz), cleaned up,
+  removed the 32400 forward and retired Plex for good. No sign of root access.
+  This ticket was rescoped: Plex checks are out; overlord now confirms Plex stays
+  gone and watches for the signs that would have caught this attack on day one.
+
+STAGE 0 FINDINGS (done, read only)
+  - Plex: was enabled; stopped by Jay 10-21 and 10-22 (sudo). Compromise as above.
+  - HDHomeRun: HDFX-4K, 4 tuners, firmware 20250815, MAC 00:18:dd:0a:b1:25, now at
+    10.0.0.244 (no DHCP reservation). hdhr-ac4 still has HDHR_IP=10.0.0.239, which
+    no longer answers, so hdhr-ac4's /discover.json returns 500: channel 6 is likely
+    broken. Fix is Jay's (DHCP reservation + recreate hdhr-ac4), not overlord's.
+  - hdhr-ac4: :8080/ -> 200 (web UI), :8080/discover.json -> 500, :5004/ -> 404
+    (stream port; any HTTP answer means it is up).
+  - vnstat not installed (not needed for this scope).
+  - Expected services (Jay, 2026-10-22): snap.docker.dockerd ssh nginx php8.1-fpm
+    overlord-web cron ufw.
+
+STAGE 1: COLLECTOR (collect/uba5.sh)
+  1. systemd: EXPECTED_UNITS at the top. For each: is-active, is-enabled,
+     ActiveEnterTimestamp, NRestarts; "EXPECTED BUT not active/enabled" stands out.
+     Failed units and timers stay as they are.
+  2. New section ota (after docker):
+       - hdhr-ac4: HTTP codes for :8080/, :8080/discover.json, :5004/; its HDHR_IP
+         (only that variable from the container's env).
+       - tuner(s) in TUNER_IPS at the top: ModelNumber, FirmwareVersion, TunerCount,
+         tuners in use; UNREACHABLE after 5 s. "HDHR_IP MISMATCH" if hdhr-ac4 points
+         at an address not in TUNER_IPS.
+       - SiliconDust devices (MAC 00:18:dd) in the ARP table, so a moved tuner shows
+         its new address.
+  3. New section security (after ota):
+       - load average and the top 5 processes by CPU (user, pid, %cpu, elapsed, name).
+       - established TCP connections per user, LAN vs outside (own IPv6 /64 = LAN);
+         "UNEXPECTED OUTBOUND" for a user with outside connections who is not in
+         OUTBOUND_OK_USERS. Counts only, no outside addresses.
+       - executable files in /tmp, /var/tmp, /dev/shm owned by a system account
+         (uid 1-999 or nobody): owner, size, mtime, path, flagged
+         "UNEXPECTED EXECUTABLE".
+       - Plex stays gone: package installed?, unit active?, processes as user plex;
+         "PLEX IS BACK" if any.
+  4. redact.sh: an absolute system path (/usr, /etc, /var, /home, /opt, /snap, ...)
+     is checked one path segment at a time instead of as a whole, so long paths
+     survive while a long secret-looking segment is still redacted. Selftest: a keep
+     sample (long path) and a leak sample (secret as a path segment). X-Plex-Token
+     values are already caught by the generic token rule.
+
+STAGE 2: PROMPT (run/prompt.md)
+  - Opening: uba5 also runs hdhr-ac4 (muxes AC-4 audio so channel 6 plays) fed by an
+    HDHomeRun tuner. Plex was retired after a compromise on 2026-10-22.
+  - "problem": an expected service not active or not enabled; hdhr-ac4 down or its
+    /discover.json failing; tuner UNREACHABLE; HDHR_IP MISMATCH; any UNEXPECTED
+    EXECUTABLE; UNEXPECTED OUTBOUND; PLEX IS BACK; a process pinning the CPU that
+    isn't an obvious known job.
+  - "watch": load clearly higher than in recent runs with no obvious cause.
+
+STAGE 3: VERIFY
+  - bash -n collect/uba5.sh; collect/redact.sh --selftest passes.
+  - Claude Code tests the new section functions with sample data and stubbed
+    commands only (never the live collector).
+  - Jay: sudo ./install.sh, then
+      sudo -u sysai sudo /usr/local/sbin/overlord-collect-uba5 | sed -n '/===== systemd/,/===== journal/p;/===== ota/,/===== cookie-cam/p'
+    shows expected services, ota and security.
+  - Jay: sudo systemctl start overlord.service; the report flags the HDHR_IP
+    mismatch (until fixed) and otherwise reads sensibly. Report the run's cost.
+  - Jay can trigger extra runs (e.g. when the LAN feels slow) with
+    sudo systemctl start overlord.service; each costs one run.
+
+OUTPUT
+  Files changed; selftest output; sample-data test output; the off-schedule run's
+  status, summary and cost; every sudo command Jay ran.

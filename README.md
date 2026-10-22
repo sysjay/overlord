@@ -3,10 +3,11 @@
 A daily health check of everything Jay runs at home, starting with **uba5** and
 **cookiepi**. Every morning at 06:30 Eastern:
 
-1. A root-owned, read-only **collector** gathers facts on uba5: host, systemd,
-   journal errors, apt updates, Docker containers, Cookie-Cam, go2rtc, cookiepi,
-   and overlord's own recent runs. Everything passes through a secret-redaction
-   filter.
+1. A root-owned, read-only **collector** gathers facts on uba5: host, systemd
+   (including services that must always run), journal errors, apt updates, Docker
+   containers, the OTA chain (hdhr-ac4 and the HDHomeRun tuner), signs of
+   intrusion, Cookie-Cam, go2rtc, cookiepi, and overlord's own recent runs.
+   Everything passes through a secret-redaction filter.
 2. **Claude** (headless Claude Code, no tools) reads the facts on stdin and
    answers with a short report: `status` ok / warn / problem, a `summary` and
    `report_md`.
@@ -15,6 +16,23 @@ A daily health check of everything Jay runs at home, starting with **uba5** and
    `/ui/system` card (cookie-cam Ticket 89).
 
 Fixes never happen here. A problem in a report becomes a ticket in the right repo.
+
+## What it watches on uba5
+
+Settings at the top of `collect/uba5.sh`:
+
+- **Expected services** (`EXPECTED_UNITS`): snap.docker.dockerd, ssh, nginx,
+  php8.1-fpm, overlord-web, cron, ufw. A service that is stopped or not enabled is
+  a problem, not just a failed one.
+- **OTA chain:** hdhr-ac4 (muxes AC-4 audio so channel 6 plays) must answer on
+  8080 and 5004, and its `HDHR_IP` must match `TUNER_IPS`. The tuner has no DHCP
+  reservation yet; if it moves, the report shows where (SiliconDust MACs in ARP).
+- **Intrusion signs**, added after Plex was compromised on 2026-10-17 and retired
+  on 2026-10-22: the top CPU processes, outside connections made by any user not
+  in `OUTBOUND_OK_USERS` (root, sysjay, sysai), executables owned by system
+  accounts in `/tmp`, `/var/tmp` and `/dev/shm`, and Plex coming back.
+  If a legitimate service needs to connect out, add its user to
+  `OUTBOUND_OK_USERS` and rerun `install.sh`.
 
 ## Safety model
 
@@ -69,6 +87,9 @@ systemd units. It enables the timer and starts the web server.
 | Site server | `systemctl status overlord-web` |
 | One run's files | `/home/sysai/runs/<run_id>/`: `facts.txt`, `result.json`, `report.json`, `email.txt` |
 | Ledger | `/home/sysai/runs/ledger.csv`: run_id, status, cost_usd, model, duration_s |
+
+Extra runs are fine whenever something feels off (e.g. the LAN is slow): each
+`sudo systemctl start overlord.service` costs one run.
 
 Run folders older than 90 days are deleted after each run. The site shows only
 runs whose folders still exist.

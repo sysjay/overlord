@@ -13,6 +13,14 @@ SECTION_CAP=30000    # bytes, per section
 SECTION_TIMEOUT=60   # seconds, per section
 LEDGER=/home/sysai/runs/ledger.csv
 COOKIEPI=http://10.0.0.133/status
+# units that must always be running (Jay, 2026-10-22); Plex is retired, not expected
+EXPECTED_UNITS="snap.docker.dockerd ssh nginx php8.1-fpm overlord-web cron ufw"
+# HDHomeRun tuner(s). TODO: no DHCP reservation yet, so the address can move
+# (it did: .239 -> .244); the ota section lists SiliconDust MACs seen in ARP.
+TUNER_IPS="10.0.0.244"
+HDHR_AC4=hdhr-ac4    # container that muxes AC-4 audio so channel 6 plays
+# users allowed to hold connections to outside (non-LAN) addresses
+OUTBOUND_OK_USERS="root sysjay sysai"
 
 here=$(dirname "$(readlink -f "$0")")
 if [ -x "$here/overlord-redact" ]; then REDACT="$here/overlord-redact"
@@ -43,7 +51,20 @@ sec_host() {
 }
 
 sec_systemd() {
-    echo "failed units:"
+    local u act en since nr
+    echo "expected services:"
+    for u in $EXPECTED_UNITS; do
+        act=$(systemctl is-active "$u" 2>/dev/null)
+        en=$(systemctl is-enabled "$u" 2>/dev/null)
+        since=$(systemctl show "$u" -p ActiveEnterTimestamp --value 2>/dev/null)
+        nr=$(systemctl show "$u" -p NRestarts --value 2>/dev/null)
+        printf '%s active=%s enabled=%s since=%s restarts=%s' \
+            "$u" "${act:-unknown}" "${en:-unknown}" "${since:-n/a}" "${nr:-n/a}"
+        [ "$act" = active ] || printf '  EXPECTED BUT NOT ACTIVE'
+        [ "$en" = enabled ] || printf '  EXPECTED BUT NOT ENABLED'
+        echo
+    done
+    echo; echo "failed units:"
     systemctl --failed --no-legend --no-pager
     echo; echo "timers (all):"
     systemctl list-timers --all --no-pager
@@ -85,6 +106,100 @@ sec_docker() {
             | sed -E 's/^[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9:.,]+Z?[[:space:]]*//; s/^\[[^]]*\][[:space:]]*//' \
             | dedupe | head -25 | head -c 4000
     done
+}
+
+sec_ota() {
+    local p code hdhr ip d s arp
+    # hdhr-ac4 serves its UI on 8080/ and streams on 5004 (404 on / is normal there)
+    for p in 8080/ 8080/discover.json 5004/; do
+        code=$(curl -s -m 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$p")
+        echo "$HDHR_AC4 :$p http=$code"   # 000 = no answer
+    done
+    if have docker; then
+        # only HDHR_IP from the container's env, nothing else
+        hdhr=$(docker inspect "$HDHR_AC4" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
+            | sed -n 's/^HDHR_IP=//p' | head -1)
+        echo "$HDHR_AC4 HDHR_IP=${hdhr:-unknown}"
+        if [ -n "$hdhr" ]; then
+            case " $TUNER_IPS " in
+                *" $hdhr "*) ;;
+                *) echo "HDHR_IP MISMATCH: $HDHR_AC4 points at $hdhr, tuner list is $TUNER_IPS" ;;
+            esac
+        fi
+    fi
+    echo
+    for ip in $TUNER_IPS; do
+        d=$(curl -s -m 5 "http://$ip/discover.json")
+        if [ -z "$d" ]; then echo "tuner $ip UNREACHABLE"; continue; fi
+        jq -r --arg ip "$ip" '"tuner \($ip) model=\(.ModelNumber) firmware=\(.FirmwareVersion) tuners=\(.TunerCount)"' \
+            <<<"$d" 2>/dev/null || echo "tuner $ip: discover.json is not JSON"
+        s=$(curl -s -m 5 "http://$ip/status.json")
+        jq -r --arg ip "$ip" '"tuner \($ip) in use: \([.[] | select(.VctNumber or .TargetIP)] | length) of \(length)"' \
+            <<<"$s" 2>/dev/null || echo "tuner $ip: status.json unreadable"
+    done
+    arp=$(ip neigh 2>/dev/null | awk 'tolower($0) ~ /lladdr 00:18:dd/ {printf "%s(%s) ", $1, $NF}')
+    echo "SiliconDust devices in ARP table: ${arp:-none}"
+}
+
+# stdin: `ss -Htnp state established`; $1: own global IPv6 /64 prefixes ("a:b:c:d: ..."),
+# $2: local listening ports. stdout: "<pid> lan|in|out" per connection that has a
+# process: lan = LAN peer, in = outside peer that connected to us, out = we connected out.
+conn_class() {
+    awk -v pfx="$1" -v lports=" $2 " '
+        BEGIN { n = split(pfx, P, " ") }
+        {
+            peer = $4
+            if (peer ~ /^\[/) { sub(/^\[/, "", peer); sub(/\].*$/, "", peer) } else sub(/:[0-9]+$/, "", peer)
+            sub(/^::ffff:/, "", peer); peer = tolower(peer)
+            lan = (peer ~ /^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|127\.|169\.254\.)/ || peer == "::1" \
+                   || peer ~ /^(fe80|fc|fd)/)
+            if (!lan) { split(peer, h, ":"); p4 = h[1] ":" h[2] ":" h[3] ":" h[4] ":"
+                        for (i = 1; i <= n; i++) if (p4 == P[i]) lan = 1 }
+            lp = $3; sub(/.*:/, "", lp)
+            cls = lan ? "lan" : (index(lports, " " lp " ") ? "in" : "out")
+            if (match($0, /pid=[0-9]+/)) print substr($0, RSTART + 4, RLENGTH - 4), cls
+        }'
+}
+
+# stdin: "<user> lan|in|out" per connection; $1: users allowed to connect out
+conn_by_user() {
+    awk -v ok=" $1 " '
+        { u[$1] = 1; c[$1, $2]++ }
+        END { for (x in u) {
+                  printf "%s lan=%d outside_in=%d outside_out=%d", x, c[x, "lan"], c[x, "in"], c[x, "out"]
+                  if (c[x, "out"] > 0 && index(ok, " " x " ") == 0) printf "  UNEXPECTED OUTBOUND"
+                  print "" } }' | sort
+}
+
+sec_security() {
+    local pfx lports pid cls u n st act
+    echo "loadavg: $(cut -d' ' -f1-3 /proc/loadavg) (cpus: $(nproc))"
+    echo "top 5 processes by CPU (%cpu is the average over each process's life):"
+    ps -eo user:16,pid,pcpu,etime,comm --sort=-pcpu | head -6
+    echo
+    echo "established TCP connections by user (counts only; outside_in = visitors to our ports):"
+    pfx=$(ip -6 -o addr show scope global 2>/dev/null \
+        | awk '{split($4, a, "/"); split(a[1], h, ":"); print tolower(h[1] ":" h[2] ":" h[3] ":" h[4] ":")}' \
+        | sort -u | tr '\n' ' ')
+    lports=$(ss -Htln 2>/dev/null | awk '{p = $4; sub(/.*:/, "", p); print p}' | sort -u | tr '\n' ' ')
+    ss -Htnp state established 2>/dev/null | conn_class "$pfx" "$lports" \
+        | while read -r pid cls; do
+              u=$(ps -o user:32= -p "$pid" 2>/dev/null | tr -d ' ')
+              echo "${u:-?} $cls"
+          done | conn_by_user "$OUTBOUND_OK_USERS"
+    echo
+    echo "executables in /tmp, /var/tmp, /dev/shm owned by system accounts:"
+    find /tmp /var/tmp /dev/shm -xdev -maxdepth 4 -type f -perm /111 \
+        \( \( -uid -1000 ! -uid 0 \) -o -uid 65534 \) \
+        -printf 'UNEXPECTED EXECUTABLE: %u %s bytes %TY-%Tm-%Td %TH:%TM %p\n' 2>/dev/null \
+        | head -30 | grep . || echo "none"
+    echo
+    # Plex was retired after a compromise (2026-10-22); it must stay gone
+    st=$(dpkg-query -W -f='${db:Status-Status}' plexmediaserver 2>/dev/null)
+    act=$(systemctl is-active plexmediaserver 2>/dev/null)
+    n=$(pgrep -c -u plex 2>/dev/null); n=${n:-0}
+    echo "plex: package=${st:-not-installed} unit=${act:-unknown} processes=$n"
+    if [ "$st" = installed ] || [ "$act" = active ] || [ "$n" -gt 0 ]; then echo "PLEX IS BACK"; fi
 }
 
 sec_cookiecam() {
@@ -134,8 +249,9 @@ section() {
     echo
 }
 
-export LEDGER COOKIEPI
+export LEDGER COOKIEPI EXPECTED_UNITS TUNER_IPS HDHR_AC4 OUTBOUND_OK_USERS
 export -f have dedupe sec_host sec_systemd sec_journal sec_updates sec_docker \
+    sec_ota conn_class conn_by_user sec_security \
     sec_cookiecam sec_go2rtc sec_cookiepi sec_overlord
 
 {
@@ -146,6 +262,8 @@ export -f have dedupe sec_host sec_systemd sec_journal sec_updates sec_docker \
     section journal sec_journal
     section updates sec_updates
     section docker sec_docker
+    section ota sec_ota
+    section security sec_security
     section cookie-cam sec_cookiecam
     section go2rtc sec_go2rtc
     section cookiepi sec_cookiepi
