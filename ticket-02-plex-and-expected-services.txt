@@ -1,7 +1,7 @@
 Priority: P2
-Status: Not started
-Next action: Claude Code: Stage 0 (read only)
-Waiting on: -
+Status: Blocked
+Next action: Jay: contain the Plex compromise found in Stage 0
+Waiting on: Jay (Plex incident response)
 Updated: 2026-10-22
 
 TICKET-02: Watch Plex and the OTA chain, and catch services that are stopped (not just

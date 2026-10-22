@@ -5,4 +5,4 @@ status header changes.
 
 | # | Ticket | Priority | Status | Next action | Waiting on | Updated |
 |---|---|---|---|---|---|---|
-| 02 | [plex-and-expected-services](ticket-02-plex-and-expected-services.txt) | P2 | Not started | Claude Code: Stage 0 (read only) | - | 2026-10-22 |
+| 02 | [plex-and-expected-services](ticket-02-plex-and-expected-services.txt) | P2 | Blocked | Jay: contain the Plex compromise found in Stage 0 | Jay (Plex incident response) | 2026-10-22 |
