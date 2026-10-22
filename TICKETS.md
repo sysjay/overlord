@@ -5,4 +5,4 @@ status header changes.
 
 | # | Ticket | Priority | Status | Next action | Waiting on | Updated |
 |---|---|---|---|---|---|---|
-| 02 | [plex-and-expected-services](ticket-02-plex-and-expected-services.txt) | P2 | Blocked | Jay: rescope ticket (Plex retired 2026-10-22; drop Plex checks, watch it stays gone) | Jay (rescope; hdhr-ac4 keep or retire) | 2026-10-22 |
+| 02 | [plex-and-expected-services](ticket-02-plex-and-expected-services.txt) | P2 | Blocked | Jay: rescope ticket (Plex retired 2026-10-22; drop Plex checks, watch it stays gone) | Jay (rescope in claude.ai; hdhr-ac4 stays) | 2026-10-22 |
