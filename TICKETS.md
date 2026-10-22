@@ -5,4 +5,4 @@ status header changes.
 
 | # | Ticket | Priority | Status | Next action | Waiting on | Updated |
 |---|---|---|---|---|---|---|
-| - | No open tickets | | | | | |
+| 02 | [plex-and-expected-services](ticket-02-plex-and-expected-services.txt) | P2 | Not started | Claude Code: Stage 0 (read only) | - | 2026-10-22 |
