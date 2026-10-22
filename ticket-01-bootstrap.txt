@@ -1,0 +1,201 @@
+Priority: P2
+Status: Not started
+Next action: Claude Code: Stage 0 read-only checks on uba5
+Waiting on: -
+Updated: 2026-10-22
+
+TICKET-01: overlord bootstrap - sysai account, collectors, daily AI health report,
+email, a status website, and the Cookie-Cam report card
+
+FILES (all new; repo ~/projects/overlord on uba5, origin github.com/sysjay/overlord)
+  CLAUDE.md                     repo conventions (see Stage 1)
+  README.md                     what overlord is, setup, how to read a report, costs
+  TICKETS.md                    list of open tickets (hand-kept until a generator exists)
+  install.sh                    run by Jay with sudo: installs the root-owned parts
+  collect/uba5.sh               the uba5 collector (installed to /usr/local/sbin/)
+  collect/redact.sh             secret redaction used by every collector
+  run/overlord-run.sh           the runner (installed to /usr/local/lib/overlord/)
+  run/prompt.md                 Claude's instructions (installed beside the runner)
+  run/report.schema.json        the JSON schema for Claude's answer
+  run/render_site.py            builds the static status site from the ledger and runs
+  web/overlord_web.py           tiny stdlib web server for the site, with a login
+  systemd/overlord.service      oneshot, User=sysai
+  systemd/overlord.timer        06:30 America/New_York, Persistent=true
+  systemd/overlord-web.service  serves the site on :8090, User=sysai, read only
+  sudoers/overlord              one rule (installed to /etc/sudoers.d/overlord)
+  config/env.example            template for /home/sysai/.config/overlord/env
+  config/msmtprc.example        template for /home/sysai/.config/overlord/msmtprc
+  .gitignore                    env, msmtprc, runs/
+
+WHAT OVERLORD IS (planned in claude.ai, 2026-10-22)
+  A daily health check of everything Jay runs at home, starting with uba5 and cookiepi.
+  Every morning at 06:30 a root-owned collector gathers facts; Claude (headless Claude
+  Code) reads them and writes a short report; the runner emails it to Jay (every run),
+  updates overlord's own status website (http://10.0.0.33:8090/, behind a login), and
+  posts it to Cookie-Cam's /ui/system card (cookie-cam Ticket 89), which links to the
+  site. It runs as its own account,
+  sysai, which can change nothing:
+  - sysai is NOT in the docker group (that is root on uba5), NOT in go2rtc, and has no
+    sudo except running the one collector with no arguments.
+  - Claude gets NO tools in v1: the facts arrive on stdin and Claude only answers. It
+    can't run commands, read files or edit anything. A later ticket may allow read-only
+    tools once v1 has run for a while.
+  - Fixes never happen here. A problem in a report becomes a ticket in the right repo.
+  - Cost: each run records Claude Code's total_cost_usd, has a hard per-run cap, and
+    uses its own API key with a spend limit set in the Claude Console.
+
+STAGE 0: CHECKS (Claude Code, read only, uba5)
+  - which claude; claude --version. Whether Claude Code is installed system-wide (usable
+    by another account) or only in Jay's home. Report; don't install yet.
+  - claude --help and the CLI reference (https://code.claude.com/docs/en/cli-reference):
+    the exact flags for: bare mode, a system prompt from a file, JSON output with a JSON
+    schema, a per-run budget cap (--max-budget-usd), and running with no tools at all.
+    Report the exact flag set you will use; STOP if there is no way to run with zero
+    tools.
+  - which msmtp jq curl sensors smartctl; systemd version (OnCalendar time zones need
+    systemd 235+).
+  - id sysai (expect: no such user).
+  - ss -ltnp | grep ':8090 ' (expect nothing; if the port is taken, propose another and
+    STOP for Jay).
+  - python3 --version (the site server and renderer use the standard library only).
+  - curl -s http://127.0.0.1:5000/health and http://10.0.0.133/status (cookiepi's status
+    page): both answer? Note the fields; never print anything that looks like a secret.
+
+STAGE 1: REPO AND CONVENTIONS
+  - git clone https://github.com/sysjay/overlord.git ~/projects/overlord (the repo exists,
+    private; its first commit holds only this ticket). Commit the files below, push.
+  - CLAUDE.md, modelled on cookie-cam's: Claude Code is the ticket executor; tickets
+    named ticket-NN-short-name.txt with the status header (Priority / Status / Next
+    action / Waiting on / Updated) and a FILES section right after the title; only
+    touch listed files; docs sync on close (README, TICKETS.md); closed tickets move to
+    closed-tickets/. Plus overlord's own rules:
+      * Collectors are read only. A collector never restarts, edits, deletes or writes
+        outside its own output.
+      * Every collector's output passes through redact.sh. Never print or send
+        passwords, tokens, API keys, Wi-Fi keys or credentials in URLs.
+      * Claude runs with no tools unless a ticket says otherwise.
+      * sudo on uba5 is Jay's: print the commands, never run them.
+  - This ticket file is already in the repo as ticket-01-bootstrap.txt.
+
+STAGE 2: ACCOUNT AND SECRETS (Jay runs; Claude Code prints the commands)
+  sudo useradd -m -s /bin/bash sysai          # home for its Claude Code config and runs
+  sudo -u sysai mkdir -p -m 700 /home/sysai/.config/overlord /home/sysai/runs
+  Jay also picks a login for the status site and writes OVERLORD_WEB_USER and
+  OVERLORD_WEB_PASS into the same env file.
+  Jay creates, in the Claude Console, an API key named "overlord" (ideally in its own
+  workspace with a monthly spend limit, e.g. $5) and a Gmail app password (Google
+  account -> Security -> App passwords; needs 2-Step Verification). Jay writes both,
+  with an editor, into /home/sysai/.config/overlord/env and msmtprc from the .example
+  templates; owner sysai, mode 600. Claude Code never sees or prints them.
+  If Stage 0 found Claude Code only in Jay's home, add the install command for a
+  system-wide copy here (Jay runs it).
+
+STAGE 3: COLLECTORS
+  collect/redact.sh (filter, stdin -> stdout): replace credentials in URLs
+  (scheme://user:pass@ -> scheme://***@), values after password= / passwd= / token= /
+  key= / secret= / api_key / Authorization:, PEM blocks, and long hex/base64 runs that
+  look like keys (>= 32 chars). Has a --selftest that runs fixed samples and fails on
+  any leak; the runner calls it before every run.
+  collect/uba5.sh (runs as root via sudo; no arguments; plain-text sections with
+  headers; whole output capped at 200 KB, each section capped; always exits 0 and
+  writes "SECTION FAILED: <why>" instead of stopping):
+    host       hostname, uptime, load, memory, disk use per filesystem (df -h), inodes,
+               CPU temp (sensors), SMART overall health if smartctl exists
+    systemd    systemctl --failed; timers that missed runs
+    journal    journalctl -p err --since "24 hours ago" (deduplicated, counted, capped)
+    updates    count of pending apt updates and security updates; reboot-required
+    docker     docker ps -a: name, image, status, restart count, health; per running
+               container the last 24 h of logs filtered to warn/error lines, capped
+    cookie-cam curl 127.0.0.1:5000/health and /api/status (stalls, captures); the
+               newest task_runs from /health if present
+    go2rtc     curl 127.0.0.1:1984/api/streams, keeping ONLY stream names and
+               producer/consumer counts (jq); the sources hold the Front Door login
+    cookiepi   curl -m 5 http://10.0.0.133/status (version, uptime, temp, throttled,
+               RSSI, MQTT, PIR, readers); unreachable is itself a finding
+    overlord   the last 7 runs' status and cost from /home/sysai/runs/ledger.csv
+  Everything piped through redact.sh before it leaves the script.
+  sudoers/overlord: exactly
+    sysai ALL=(root) NOPASSWD: /usr/local/sbin/overlord-collect-uba5 ""
+  (the "" forbids arguments). install.sh installs it with visudo -cf first.
+
+STAGE 4: THE RUNNER
+  run/overlord-run.sh (as sysai, from the service):
+  1. source ~/.config/overlord/env; run redact.sh --selftest (fail -> error report).
+  2. sudo /usr/local/sbin/overlord-collect-uba5 > ~/runs/<UTC stamp>/facts.txt
+  3. claude in bare mode, no tools, system prompt from prompt.md, the facts on stdin,
+     JSON output with report.schema.json, --max-budget-usd 0.50, timeout 10 min (the
+     exact flags from Stage 0). Save the raw JSON as result.json.
+  4. Read structured_output (status ok|warn|problem, summary, report_md) and
+     total_cost_usd, model, duration_ms with jq. Any failure (exit code, timeout, bad
+     JSON, budget hit) -> status "error", summary says what failed, cost from the JSON
+     if there is one, else 0.
+  5. Append a line to ~/runs/ledger.csv: run_id, status, cost_usd, model, duration_s.
+  6. POST the report to Cookie-Cam (cookie-cam Ticket 89 contract, below). A failed
+     POST is logged and mentioned in the email; it doesn't fail the run.
+  7. Email via msmtp, from and to jaytcornell@gmail.com, every run:
+       Subject: [overlord] OK|WARN|PROBLEM|ERROR - <summary, cut to ~80 chars>
+       Body: the report text, then "Cost this run $X · this month $Y (N runs)".
+  8. Rebuild the status site (render_site.py), then delete run folders older than 90
+     days (the site keeps only what still exists).
+  prompt.md tells Claude: it's reviewing one home's servers for a retired engineer who
+  wants a short morning report; lead with anything that needs action, then things to
+  watch, then one line "everything else normal"; compare with the last runs' ledger
+  lines where useful; never suggest running commands as root without saying why; never
+  repeat anything that looks like a secret; status = problem only for something broken
+  or about to break, warn for trends, ok otherwise; report_md under ~40 lines.
+  report.schema.json: {status: enum ok|warn|problem, summary: string <=300,
+  report_md: string}, all required.
+
+  Cookie-Cam contract (identical to cookie-cam Ticket 89):
+    POST http://127.0.0.1:5000/api/overlord/report  (JSON)
+    {"run_id","started_at","finished_at" (UTC ISO 8601), "status" ok|warn|problem|error,
+     "summary" (<=300), "report_md" (<=64 KB), "cost_usd", "model", "hosts" [..]}
+    200 stored / 400 invalid / 403 not localhost.
+
+STAGE 5: THE STATUS WEBSITE
+  render_site.py (run by the runner as sysai; stdlib only) writes static HTML to
+  /home/sysai/site/ (atomically: build in a temp dir, then rename):
+  - index.html: the latest status as a big badge with the summary and time; "Cost this
+    run / this month / last 30 days"; the report text; a history table of the last 90
+    runs (date, status, summary, cost, duration) linking to each run's page; a "no run
+    since <time>" warning when the newest run is over 26 h old (computed when rendered,
+    and also by a few lines of page JavaScript so an old page still warns).
+  - runs/<run_id>.html: one run's report, status, model, cost, duration, hosts, and
+    links to newer/older runs. The collector's facts are NOT published (they're for
+    Claude; the report is what Jay reads).
+  - All text HTML-escaped; plain CSS in the page; no CDN, no external requests; light
+    and dark mode; readable on the iPhone.
+  overlord_web.py (stdlib http.server, ~60 lines): serves /home/sysai/site/ read only
+  on 0.0.0.0:8090; GET and HEAD only; HTTP Basic auth against OVERLORD_WEB_USER /
+  OVERLORD_WEB_PASS from the env file (constant-time compare); 401 otherwise; no
+  directory listings; never serves dotfiles or anything outside the site directory.
+  overlord-web.service: User=sysai, Restart=always, EnvironmentFile= the env file,
+  NoNewPrivileges=true, ProtectSystem=strict, ProtectHome=read-only, PrivateTmp=true.
+  The same login protects the site because reports describe the home network; the
+  collector's redaction keeps secrets out of them either way.
+
+STAGE 6: INSTALL, SCHEDULE, FIRST RUN
+  install.sh (Jay: sudo ./install.sh; idempotent): copies collect/uba5.sh to
+  /usr/local/sbin/overlord-collect-uba5 and redact.sh beside it (root:root 755), the
+  runner, prompt and schema to /usr/local/lib/overlord/ (root:root, 755/644), the
+  sudoers file (visudo -cf, 440), render_site.py and overlord_web.py beside the runner,
+  the units; daemon-reload; enable the timer and enable --now overlord-web.
+  overlord.service: Type=oneshot, User=sysai, ExecStart the runner,
+  TimeoutStartSec=15min. overlord.timer: OnCalendar=*-*-* 06:30 America/New_York,
+  Persistent=true (a missed run happens at next boot).
+  Test, in order:
+    1. sudo -u sysai sudo /usr/local/sbin/overlord-collect-uba5 | head -100: readable,
+       no secrets (Claude Code greps the full output for the redaction patterns and the
+       known variable names, prints only counts).
+    2. sudo -u sysai sudo /usr/local/sbin/overlord-collect-uba5 --x -> refused by sudo.
+    3. sudo -u sysai docker ps -> permission denied (proves no docker group).
+    4. sudo systemctl start overlord.service; then journalctl -u overlord: the email
+       arrives, the /ui/system card shows it (needs cookie-cam Ticket 89), the ledger
+       has a line, result.json shows the tools list was empty.
+    5. Status site: from the Mac, http://10.0.0.33:8090/ asks for the login, then shows
+       the first run; curl without the login -> 401; /../etc/passwd and /.x -> 404.
+  Report the first run's cost and duration.
+
+OUTPUT
+  Repo pushed; the Stage 0 flag set; test results 1-5; first report's status, summary,
+  cost; systems accessed and how; every sudo command Jay ran.
