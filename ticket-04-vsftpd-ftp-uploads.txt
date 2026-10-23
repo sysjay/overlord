@@ -1,0 +1,112 @@
+Priority: P2
+Status: Not started
+Next action: Claude Code: Stage 0 (read only)
+Waiting on: -
+Updated: 2026-10-23
+
+TICKET-04: Watch vsftpd and the Back Yard FTP uploads; fix the expected Docker unit
+
+FILES
+  collect/uba5.sh      EXPECTED_UNITS (docker, vsftpd); new section `ftp` (sec_ftp)
+  run/prompt.md        rules for the new section and its markers
+  README.md            expected services list; what the ftp section watches
+  TICKETS.md           this ticket's row
+  (collect/redact.sh only if Stage 0 finds something in the vsftpd log that
+   needs a new pattern - then stop and ask Jay first, with its --selftest sample.)
+
+WHY (planned in claude.ai, 2026-10-23)
+  - Cookie-Cam's Back Yard camera (Reolink Argus Eco) records on its own PIR and
+    uploads clips by FTPS to vsftpd on uba5 (cookie-cam Ticket 91). Cookie-Cam's
+    ftp_ingest turns them into events. The camera does NOT retry: while vsftpd is
+    down, clips stay on its SD card and never reach Cookie-Cam.
+  - 2026-10-23: vsftpd failed at boot after the cookie-cam Ticket 94 reboot (13:07
+    EDT, exit 2). It has listen_address=10.0.0.33 and only waited for
+    network.target, so it most likely started before the address was up. No
+    uploads 13:07 -> 17:15 EDT (10:20-13:07 was the GPU install itself). Nothing
+    noticed; Jay found it while checking cookie-cam Ticket 95. Jay started it and
+    added /etc/systemd/system/vsftpd.service.d/wait-for-ip.conf
+    (After/Wants=network-online.target, Restart=on-failure, RestartSec=5).
+  - Also from Ticket 94 (same day): uba5's Docker moved from the snap to docker-ce.
+    EXPECTED_UNITS still lists snap.docker.dockerd, so every report from now on
+    flags it EXPECTED BUT NOT ACTIVE. The unit is now `docker`.
+  - Matches cookie-cam TODO "Recording Health for FTP Cameras" (an overlord check
+    that vsftpd is up and backyard uploaded something in the last N hours).
+    Faster detection (minutes, not the next morning) belongs to Ticket 03's
+    probes; see LATER.
+
+STAGE 0 - Read only (no file changes)
+  Confirm on uba5, without sudo where possible, and report:
+  1. `systemctl show docker containerd -p ActiveState -p UnitFileState` - names
+     of the docker-ce units; and that sec_docker's `have docker` now finds
+     /usr/bin/docker (the collector runs as root under sudo's secure_path).
+  2. `systemctl show vsftpd -p ActiveState -p UnitFileState -p DropInPaths -p After
+     -p Wants -p Restart -p NRestarts`: the drop-in is in effect.
+  3. vsftpd's log: path (xferlog_enable=YES, xferlog_std_format=NO -> vsftpd's own
+     format, usually /var/log/vsftpd.log), permissions, logrotate, and 3-5 sample
+     line SHAPES for OK UPLOAD, FAIL UPLOAD, FAIL LOGIN, CONNECT (no passwords are
+     logged in this format; confirm that, and that nothing in it needs redacting).
+  4. Paths: the FTP chroot /home/ftp/reolink/<camera_id>/ (uploads waiting for
+     ingest, `_rejected/`), and Cookie-Cam's VIDEO_DIR on the host
+     (expected /home/sysjay/projects/cookie-cam/data/videos/; stored Back Yard
+     clips are backyard_<UTC>_ftp.mp4 and keep the upload's mtime). Root can
+     stat these; record the real paths.
+  >>> STOP. Report, and confirm the thresholds in Stage 1 with Jay.
+
+STAGE 1 - Collector (collect/uba5.sh)
+  a. EXPECTED_UNITS: replace snap.docker.dockerd with docker (and containerd if
+     Stage 0 shows it's a separate always-on unit); add vsftpd. Keep the comment
+     style: "(Jay, 2026-10-23: Docker is docker-ce since cookie-cam Ticket 94;
+     vsftpd receives the Back Yard uploads)".
+  b. New settings at the top: FTP_ROOT=/home/ftp/reolink, FTP_CAMERAS="backyard",
+     FTP_LISTEN=10.0.0.33:21, VIDEO_DIR=<Stage 0 path>, FTP_STALE_HOURS=24
+     (the camera only uploads on motion; Jay may change this after Stage 0).
+     Export them like the others.
+  c. New section `ftp` (sec_ftp), after cookie-cam. Read only; facts only, short:
+     - vsftpd: listening on FTP_LISTEN yes/no (`ss -Hltn`), else print
+       "VSFTPD NOT LISTENING".
+     - boot guard: the drop-in is present and After includes network-online.target
+       and Restart=on-failure, else "VSFTPD BOOT GUARD MISSING".
+     - this boot: vsftpd journal lines at warning or worse since boot (count + the
+       last 3, deduped), so a failed start that later recovered still shows.
+     - log, last 24 h: counts of OK UPLOAD, FAIL UPLOAD, FAIL LOGIN, and the time of
+       the last OK UPLOAD (file names reduced to the camera folder, not full names).
+     - per camera in FTP_CAMERAS: newest stored clip's mtime and age in hours
+       (newest $VIDEO_DIR/<camera>_*_ftp.mp4, stat only, never opened), count in the
+       last 24 h, and "NO <CAMERA> UPLOAD IN <N>H" if older than FTP_STALE_HOURS.
+     - waiting uploads in FTP_ROOT/<camera>/ older than 30 min (ingest should take
+       them within a minute): count + oldest age, "FTP INGEST BACKLOG" if any.
+     - files added to FTP_ROOT/<camera>/_rejected/ in the last 24 h: count.
+     - A missing path is a fact line ("not found"), not a failed section.
+  d. Collector rules hold: read only, nothing written, all output through redact.
+
+STAGE 2 - Prompt and README
+  - run/prompt.md: VSFTPD NOT LISTENING, an EXPECTED BUT NOT ACTIVE vsftpd, or
+    FTP INGEST BACKLOG -> "problem" (the Back Yard camera's clips are being lost
+    or stuck). NO <CAMERA> UPLOAD IN <N>H -> "warn" unless vsftpd is also down
+    (a quiet yard is possible). VSFTPD BOOT GUARD MISSING, FAIL UPLOAD, new
+    _rejected files, or vsftpd boot errors that recovered -> "warn". Add one
+    sentence of context: the camera doesn't retry, so vsftpd downtime means lost
+    clips (still on the camera's SD card). Repeated FAIL LOGIN from a non-camera
+    address -> mention it under intrusion signs.
+  - README.md: expected services list (docker, vsftpd; snap gone) and a short
+    "FTP uploads" bullet in "What it watches on uba5".
+
+STAGE 3 - Verify (Jay runs the sudo parts)
+  - Claude Code: `bash -n collect/uba5.sh`; exercise sec_ftp against a temp
+    directory tree and a sample vsftpd log (sample data, never the live system);
+    redact.sh --selftest still passes.
+  - Print for Jay: `sudo ./install.sh`, then
+    `sudo /usr/local/sbin/overlord-collect-uba5 | sed -n '/===== ftp =====/,/=====/p'`
+    and the systemd section's docker/vsftpd lines. Expected: vsftpd and docker
+    active+enabled, listening yes, boot guard present, last upload time sane.
+  - Optional, Jay's call: `sudo systemctl stop vsftpd`, rerun the collector, see
+    VSFTPD NOT LISTENING and EXPECTED BUT NOT ACTIVE, `sudo systemctl start vsftpd`.
+  - Next morning's report: no snap.docker.dockerd complaint; ftp facts mentioned
+    only if something is off.
+  - Docs sync and close per CLAUDE.md.
+
+LATER (not this ticket)
+  - Ticket 03 probes: an `ftp` probe every few minutes (vsftpd listening) that
+    alerts directly, so an outage like 2026-10-23 is caught in minutes. Add it to
+    Ticket 03's probe list when that ticket is worked.
+  - More FTP cameras: just extend FTP_CAMERAS.
