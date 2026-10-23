@@ -1,0 +1,188 @@
+Priority: P2
+Status: Not started
+Next action: Claude Code: Stage 0 (read only)
+Waiting on: -
+Updated: 2026-10-22
+
+TICKET-03: Probes (frequent, no-AI checks), alerts routed through overlord, and
+overlord's recommendations - first probe: intrusion
+
+FILES
+  probes/registry.json              NEW - every probe: name, interval, account, route
+  probes/lib.sh                     NEW - shared probe helpers: JSONL line, redact,
+                                    state, alert spool write with de-duplication
+  probes/intrusion.sh               NEW - the intrusion probe
+  probes/intrusion.conf             NEW - allowlists (outbound users, CPU jobs, ports)
+  systemd/overlord-probe-intrusion.service   NEW
+  systemd/overlord-probe-intrusion.timer     NEW - every 2 min
+  systemd/overlord-alert.path       NEW - wakes the alerter when an alert is spooled
+  systemd/overlord-alert.service    NEW - the alerter, User=sysai
+  run/overlord-alert.sh             NEW - routes alerts: summarize (default) or direct
+  run/overlord-run.sh               --alert <file> mode; recommendations; probes context
+  run/prompt.md                     probes section; alert mode; recommendations rules
+  run/report.schema.json            add recommendations[]
+  run/render_site.py                probes page; recommendations page; alert runs marked
+  run/overlord-rec.py               NEW - Jay's CLI: list / accept / reject / done
+  collect/uba5.sh                   new section probes (summaries, not raw lines)
+  collect/redact.sh                 selftest samples for probe output (cmdlines)
+  install.sh                        probe accounts, dirs, units, baseline, enforcement
+  README.md                         probes, alerts, recommendations, accounts (why)
+  CLAUDE.md                         rules for probes (below) and the new layout rows
+  TICKETS.md                        this ticket's row
+
+WHY (planned in claude.ai, 2026-10-22)
+  Overlord shouldn't do everything itself. A daily AI read is good at judgement and
+  bad at timing: the Plex compromise (ticket 02) ran for five days before anyone saw
+  it. So, three layers:
+  1. PROBES: small deterministic scripts on systemd timers (minutes, not days), no AI,
+     no cost. Each appends one JSON line per run to its own log and can raise an alert.
+  2. OVERLORD's daily run reads the probes' last 24 h as summaries (plus everything it
+     reads today) and writes the report.
+  3. RECOMMENDATIONS: when overlord finds a root cause or a repeating pattern, it
+     proposes automation (usually a new probe) in a structured field. Jay accepts or
+     rejects; an accepted one becomes a ticket, built by Claude Code as now. Overlord
+     still changes nothing itself and still runs with no tools.
+
+ALERT ROUTING (Jay, 2026-10-22: "probes can alert on their own, but by default route
+through overlord for summarization")
+  - route "summarize" (default): the alerter starts an off-schedule overlord run in
+    alert mode. Claude gets the alert, the probe's last 2 h of lines and a fresh
+    collector run, and writes a focused report; the email subject starts
+    "[overlord] ALERT". Capped at 4 alert runs per day (each costs one run, ~$0.12).
+    If the cap is reached, or the run fails or times out, the alerter falls back to
+    a direct email, so an alert is never lost.
+  - route "direct": the alerter emails the alert itself at once (probe, severity,
+    findings, time, "overlord will cover this in the morning report"). For probes
+    where speed matters more than prose, or as the fallback above.
+  - Probes never hold secrets: a probe only writes an alert file into a spool
+    directory. Only the alerter (as sysai) can read the Gmail and API credentials.
+  - De-duplication: the same probe + check is alerted at most once per hour (state
+    in the probe); a check that clears and returns after 1 h alerts again.
+
+PROBE ACCOUNTS (Jay agreed 2026-10-22; why, for README.md)
+  Each probe runs as its own system account with nothing else attached
+  (overlord-probe-<name>: no home, no shell, no password, no groups except
+  overlord-alerts). Benefits:
+  - A probe can't read sysai's API key or Gmail password, or anything in /home.
+  - A buggy or exploited probe can only damage its own state and log files.
+  - Each probe gets only the permissions its own checks need, written in its unit
+    file where they can be reviewed, instead of every probe getting root.
+  - ps, the journal and file ownership show which probe did what.
+  Why not systemd's DynamicUser (throwaway uids): DynamicUser forces a private /tmp,
+  so the intrusion probe couldn't see the real /tmp, the first place the Plex attack
+  wrote to. A static account with the same lockdown gives the benefits without that.
+
+THE INTRUSION PROBE (every 2 min; what would have caught the Plex attack on day one)
+  Checks, each a finding with check name, severity and detail:
+  1. exe_in_tmp (critical): a process whose executable is in /tmp, /var/tmp, /dev/shm,
+     or shows "(deleted)".
+  2. miner_proxy (critical): process command lines matching known miner / proxy
+     patterns (xmrig, minerd, "stratum+tcp", "--donate-level", myawesomeproxy; list in
+     intrusion.conf, matched case-insensitively).
+  3. tmp_executable (critical): an executable file in those directories owned by a
+     system account (uid 1-999 or nobody). Same rule as the collector's security
+     section; move that logic into probes/lib.sh and have collect/uba5.sh use it
+     (collect/uba5.sh is listed; keep its output unchanged).
+  4. unexpected_outbound (critical): established TCP to outside the LAN by a uid not in
+     OUTBOUND_OK_USERS; also any connection to common pool ports (3333, 4444, 5555,
+     7777, 14444, 45700, list in conf). Counts and ports only; no outside addresses in
+     the log or the alert.
+  5. plex_back (critical): plexmediaserver active, the package installed, or processes
+     as user plex (until Jay's apt purge, this fires: start it as warn while the package
+     is installed and the unit inactive; critical if anything runs).
+  6. cpu_hog (warn): a process not in CPU_OK over 80 % CPU for 3 checks in a row.
+  7. new_listener (warn): a listening TCP/UDP port not in the baseline (taken by
+     install.sh into the probe's state dir; Jay re-takes it with a documented command
+     after adding a service).
+  Each run writes one line to /var/log/overlord/probes/intrusion.jsonl:
+    {"ts","probe":"intrusion","severity":"ok|warn|critical","findings":[...],
+     "metrics":{"load1","procs","outbound_by_user":{...},"listeners":N},"ms":N}
+  Everything in "findings" passes through overlord-redact first (command lines can hold
+  secrets). Keep 14 days (the probe trims its own log once a day). A run takes well
+  under 2 s; log a warning in its own line if it takes over 10 s.
+  Permissions (unit file, reviewed in Stage 0): User=overlord-probe-intrusion,
+  AmbientCapabilities and CapabilityBoundingSet = CAP_SYS_PTRACE (read /proc/<pid>/exe
+  of other users' processes) and CAP_DAC_READ_SEARCH (list directories an attacker
+  locked down in /tmp), NoNewPrivileges=yes, ProtectSystem=strict, ProtectHome=yes,
+  InaccessiblePaths=/etc/shadow /etc/gshadow /etc/sudoers /etc/sudoers.d /root
+  /home/sysai, PrivateTmp=no (it must see the real /tmp), PrivateDevices=yes,
+  ProtectKernelTunables=yes, ProtectControlGroups=yes, RestrictSUIDSGID=yes,
+  StateDirectory=overlord-probes/intrusion, LogsDirectory=overlord/probes,
+  ReadWritePaths= the alert spool only. CAP_DAC_READ_SEARCH can read any file, which is
+  why ProtectHome and the InaccessiblePaths above matter: the probe must not be able to
+  read any secret on uba5. Stage 3 proves it.
+
+REGISTRY AND RECOMMENDATIONS
+  probes/registry.json: [{"name":"intrusion","interval_s":120,"account":
+  "overlord-probe-intrusion","route":"summarize","log":
+  "/var/log/overlord/probes/intrusion.jsonl","purpose":"..."}]. The collector and the
+  prompt use it, so overlord knows what already exists and doesn't recommend it again.
+  report.schema.json: add "recommendations": array (may be empty) of
+    {"ref": existing id or "", "title" (<=100), "kind": "probe"|"fix"|"ticket",
+     "target_repo": "overlord"|"cookie-cam"|"other", "frequency": "" or e.g. "2 min",
+     "why" (<=400, the evidence), "check" (<=400, what it would test and when it would
+     alert)}.
+  The runner keeps /home/sysai/runs/recommendations.json: id R-1, R-2, ...; state
+  proposed | accepted | rejected | done; first_seen, last_seen, times_seen; Jay's note.
+  A ref to an existing id updates it; no ref adds a new one. The prompt gets every
+  recommendation with its state and note: never re-propose a rejected one unless there
+  is new evidence, and then say what is new.
+  overlord-rec.py (Jay runs: sudo -u sysai /usr/local/lib/overlord/overlord-rec.py ...):
+  list, show R-n, accept R-n, reject R-n "note", done R-n. Prints the next ticket's
+  title for an accepted one; it writes no tickets itself.
+  Email: new recommendations listed under the report. Site: recommendations.html (all,
+  by state) and probes.html (each probe: last run, stale?, last 24 h by severity,
+  alerts sent and how). Probe findings and recommendations are summaries; raw probe
+  lines are not published (same rule as the collector's facts).
+
+STAGE 0: CHECKS (Claude Code, read only on uba5)
+  1. systemd --version; confirm every unit directive above exists in this version
+     (systemd.exec man page). List any that don't.
+  2. python3 --version (stdlib only: json; no YAML or TOML).
+  3. What the collector's security section uses today (ss, ps, find flags), to reuse.
+  4. ss -ltnup listeners now (names only) as a first look at the baseline.
+  5. Mail path: confirm the alerter can reuse the runner's msmtp setup as sysai.
+  STOP and report before changing files, with the exact unit file you intend.
+
+STAGE 1: PROBE FRAMEWORK AND THE INTRUSION PROBE
+  probes/lib.sh, intrusion.sh, intrusion.conf, the two units, registry.json.
+  Test with sample data and stubbed commands only (CLAUDE.md): replay the ticket-02
+  attack (a process running /tmp/x, an xmrig cmdline, an executable in /var/tmp owned
+  by plex, outbound from user plex to port 3333) and expect each check to fire; a
+  quiet sample stays ok; a repeat within 1 h doesn't re-alert.
+
+STAGE 2: ALERTER AND OVERLORD CHANGES
+  overlord-alert.sh + path/service units; overlord-run.sh --alert; the probes section
+  in the collector; prompt, schema, recommendations, overlord-rec.py, site pages.
+  Test with sample data: a spooled alert routes to an alert-mode run (stub claude);
+  cap reached and a failed run both fall back to a direct email (stub msmtp); a
+  "direct" alert emails without a run.
+
+STAGE 3: INSTALL AND VERIFY (Jay runs; Claude Code prints the commands)
+  install.sh: create overlord-probe-intrusion and group overlord-alerts (sysai and
+  the probe in it), spool /var/lib/overlord/alerts (sysai:overlord-alerts 2770), take
+  the listener baseline, install and enable the timer and the path unit. It re-checks
+  every account rule (sysai and probes: no docker, no sudo beyond the collector).
+  Then, in order:
+    1. systemctl list-timers | grep overlord-probe; after 5 min,
+       tail -3 /var/log/overlord/probes/intrusion.jsonl: severity ok (or warn for the
+       Plex package until it's purged).
+    2. The probe can't read secrets:
+       sudo systemd-run -p User=overlord-probe-intrusion <same hardening flags> \
+         cat /home/sysai/.config/overlord/env /etc/shadow
+       -> both denied (Claude Code writes the exact command from the unit file).
+    3. Live alert test (harmless): sudo -u nobody cp /bin/true /tmp/overlord-test
+       && sudo -u nobody chmod +x /tmp/overlord-test. Within 2 min: tmp_executable
+       critical, an alert in the spool, an "[overlord] ALERT" email with a summary, and
+       an alert run on the site. Then rm the file; the next runs return to ok.
+    4. Next morning: the daily report has a probes part and, if any, recommendations;
+       probes.html and recommendations.html show them.
+  Report the alert run's cost and how long from file creation to email.
+
+OUTPUT
+  Stage 0 findings and the final unit file; test output; Stage 3 results 1-4 and the
+  alert timing; every sudo command Jay ran.
+
+ROLLBACK
+  sudo systemctl disable --now overlord-probe-intrusion.timer overlord-alert.path;
+  the daily run ignores a missing probe (shows it stale).
