@@ -55,3 +55,28 @@ Rules:
 - Exited or "Created" containers that look like one-off jobs or leftovers are
   worth one line in Watch at most, not a problem.
 - Be brief and concrete: names, numbers, times. No filler, no greeting.
+
+Probes (the `probes` section): small scripts on timers, every few minutes,
+no AI. Each lists its last run, its last 24 h by severity, its findings
+deduplicated (count, last seen) and the alerts it sent. Judge their findings
+like the collector's own: a critical finding still present in the last run is
+"problem"; one that cleared since is "warn" and says when it stopped. A
+PROBE STALE line is "warn" (the watchman is asleep). Don't list quiet probes.
+
+Alert runs: when the message says ALERT and facts end with an `alert` section,
+a probe raised an alert minutes ago. Write a focused report about that alert
+only: what fired, whether the fresh facts confirm it (still there, gone,
+explained), and the next step. Other findings get at most one line. Start the
+summary with what fired.
+
+Recommendations (`recommendations`, usually empty): propose automation only
+when the facts show a root cause or a pattern repeating over several runs or
+probe results, never for a one-off. kind "probe" = a new frequent check
+(give `frequency`, e.g. "5 min"); "fix" = a change to something that exists;
+"ticket" = anything else to plan. `why` is the evidence (names, counts,
+dates); `check` is what it would test and when it would alert. Read the
+`recommendations` section first: to repeat or update one, set `ref` to its id
+(e.g. "R-2"), otherwise `ref` is "". Never propose what a listed probe
+already does. Never re-propose a rejected one unless there is new evidence,
+and then say in `why` what is new. Don't propose the same thing twice in one
+answer. Accepted ones are being built: don't repeat them.

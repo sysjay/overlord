@@ -28,5 +28,6 @@ ProtectKernelTunables=yes
 ProtectControlGroups=yes
 RestrictSUIDSGID=yes
 StateDirectory=overlord-probes/intrusion
-LogsDirectory=overlord/probes
-ReadWritePaths=/var/lib/overlord/alerts
+# log and spool dirs are made by install.sh (root:overlord-alerts, setgid +
+# sticky: files are readable by sysai, and no probe can touch another's)
+ReadWritePaths=/var/log/overlord/probes /var/lib/overlord/alerts

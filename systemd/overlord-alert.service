@@ -1,0 +1,15 @@
+[Unit]
+Description=overlord alerter: route spooled probe alerts (summarize or direct)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=sysai
+Group=sysai
+SupplementaryGroups=overlord-alerts
+WorkingDirectory=/home/sysai
+ExecStart=/usr/local/lib/overlord/overlord-alert.sh
+TimeoutStartSec=20min
+# no NoNewPrivileges/ProtectSystem here: an alert run needs sudo for the collector
+PrivateTmp=true

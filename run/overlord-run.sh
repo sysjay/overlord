@@ -3,6 +3,10 @@
 # collect facts (sudo, the one allowed command) -> claude, no tools -> ledger,
 # Cookie-Cam POST, email, status site. Any failure becomes status "error";
 # the email still goes out.
+#   overlord-run.sh                 the daily run
+#   overlord-run.sh --alert <file>  an alert run (overlord-alert.sh): the same,
+#                                   plus the alert and its probe's last 2 h
+# Exits non-zero when the run's status is error.
 # Installed as /usr/local/lib/overlord/overlord-run.sh.
 set -u
 umask 077
@@ -20,6 +24,14 @@ BUDGET=0.50
 CLAUDE_TIMEOUT=600
 KEEP_DAYS=90
 HOSTS='["uba5","cookiepi"]'
+PROBE_LOGS=${OVERLORD_PROBE_LOGS:-/var/log/overlord/probes}
+RECS=$RUNS/recommendations.json
+
+mode=daily alert_file=""
+if [ "${1:-}" = --alert ]; then
+    mode=alert alert_file=${2:-}
+    [ -r "$alert_file" ] || { echo "overlord: alert file '${alert_file}' not readable" >&2; exit 2; }
+fi
 
 mkdir -p "$RUNS"
 exec 9>"$RUNS/.lock"
@@ -32,7 +44,8 @@ mkdir -p "$dir"
 log() { echo "overlord $run_id: $*" >&2; }
 
 status=error summary="" report_md="" cost=0 model="" duration_s=0 tools=null
-notes=()
+notes=() recs_out='[]' new_recs='[]'
+alert_json=null
 fail() { [ -z "$summary" ] && summary=$1; log "$1"; }
 
 run_claude() {
@@ -40,6 +53,8 @@ run_claude() {
     # system prompt from file, schema-checked JSON, hard budget.
     # --verbose makes the JSON an array that includes the init message's tools list.
     cd "$dir" || return 1
+    local ask="Write this morning's overlord report from the facts below."
+    [ "$mode" = alert ] && ask="ALERT: a probe raised the alert in the alert section at the end. Write a focused alert report from the facts below."
     timeout "$CLAUDE_TIMEOUT" "$CLAUDE" --bare -p \
         --tools "" --strict-mcp-config --disallowedTools "mcp__*" \
         --system-prompt-file "$LIB/prompt.md" \
@@ -48,8 +63,7 @@ run_claude() {
         --max-budget-usd "$BUDGET" \
         --no-session-persistence --permission-prompts none \
         ${OVERLORD_MODEL:+--model "$OVERLORD_MODEL"} \
-        "Write this morning's overlord report from the facts below." \
-        <"$dir/facts.txt" >"$dir/result.json" 2>"$dir/claude.stderr"
+        "$ask" <"$dir/input.txt" >"$dir/result.json" 2>"$dir/claude.stderr"
 }
 
 # result object of the JSON, whether claude printed one object or an array
@@ -66,6 +80,7 @@ main() {
     # 2. facts
     $COLLECT >"$dir/facts.txt" 2>"$dir/collect.stderr"
     [ -s "$dir/facts.txt" ] || { fail "collector produced no output (sudo rule or collector broken?)"; return; }
+    build_input | "$REDACT" >"$dir/input.txt"
 
     # 3. claude
     local rc=0 t0 t1
@@ -107,11 +122,61 @@ main() {
     status=$s
     summary=$(jq -r '.structured_output.summary // ""' <<<"$res" | head -c 300)
     report_md=$(jq -r '.structured_output.report_md // ""' <<<"$res" | head -c 65536)
+    recs_out=$(jq -c '.structured_output.recommendations // []' <<<"$res")
 }
 
-main
+# Claude's input: the collector's facts, overlord's earlier recommendations,
+# and in an alert run the alert with its probe's last 2 h
+build_input() {
+    cat "$dir/facts.txt"
+    echo "===== recommendations ====="
+    if [ -s "$RECS" ]; then
+        jq -r '.[] | "\(.id) [\(.state)] \(.title) (kind \(.kind), repo \(.target_repo), seen \(.times_seen)x, first \(.first_seen), last \(.last_seen))\(if .note != "" then "; Jay: \(.note)" else "" end)"' "$RECS"
+    else echo "none yet"; fi
+    echo
+    [ "$mode" = alert ] || return 0
+    local probe since
+    probe=$(jq -r '.probe' <<<"$alert_json")
+    since=$(( $(date +%s) - 7200 ))
+    echo "===== alert ====="
+    jq -r '"probe \(.probe) raised \(.severity) at \(.ts):", (.findings[] | "  \(.check) \(.severity): \(.detail)")' <<<"$alert_json"
+    echo
+    echo "probe $probe, last 2 h (time, severity, checks):"
+    if [ -r "$PROBE_LOGS/$probe.jsonl" ]; then
+        tail -n 500 "$PROBE_LOGS/$probe.jsonl" | jq -r --argjson s "$since" \
+            'select((.ts | fromdateiso8601? // 0) >= $s) | "  \(.ts) \(.severity) \([.findings[]?.check] | unique | join(","))"' \
+            | uniq -c -f 1 | awk '{c = $1; $1 = ""; print (c > 1 ? "  " c "x from" : " ") $0}'
+    else echo "  log not readable: $PROBE_LOGS/$probe.jsonl"; fi
+}
+
+# merge Claude's recommendations into $RECS: a ref to a known id updates it,
+# anything else becomes a new proposed R-n. Sets new_recs (the new entries).
+merge_recs() {
+    local cur merged
+    cur=$(jq -c 'if type == "array" then . else [] end' "$RECS" 2>/dev/null) || cur='[]'
+    [ -n "$cur" ] || cur='[]'
+    merged=$(jq -c --argjson recs "$recs_out" --arg now "$finished" '
+        reduce $recs[] as $r ({list: ., new: []};
+            if $r.ref != "" and (.list | map(.id) | index($r.ref)) then
+                .list |= map(if .id == $r.ref
+                             then .last_seen = $now | .times_seen += 1 | .why = $r.why | .check = $r.check
+                             else . end)
+            else
+                ((.list | map(.id | ltrimstr("R-") | tonumber? // 0) | max // 0) + 1) as $n
+                | ($r | del(.ref) + {id: "R-\($n)", state: "proposed", first_seen: $now,
+                                     last_seen: $now, times_seen: 1, note: ""}) as $x
+                | .list += [$x] | .new += [$x]
+            end)' <<<"$cur") || { notes+=("Could not merge recommendations."); return; }
+    jq '.list' <<<"$merged" >"$RECS.tmp" && mv "$RECS.tmp" "$RECS"
+    new_recs=$(jq -c '.new' <<<"$merged")
+}
+
+[ "$mode" = alert ] && { alert_json=$(jq -c . "$alert_file" 2>/dev/null) || alert_json=null; cp "$alert_file" "$dir/alert.json"; }
+if [ "$alert_json" = null ] && [ "$mode" = alert ]; then fail "alert file $alert_file is not JSON"
+else main; fi
 
 finished=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+[ "$status" != error ] && [ "$recs_out" != '[]' ] && merge_recs
 if [ "$status" = error ]; then
     report_md="**overlord run failed:** ${summary}
 
@@ -138,13 +203,17 @@ code=$(curl -s -m 10 -o "$dir/post.response" -w '%{http_code}' \
 [ "$code" = 200 ] || { notes+=("Cookie-Cam POST failed (HTTP ${code:-none})."); log "${notes[-1]}"; }
 
 notes_json=$(printf '%s\n' "${notes[@]+"${notes[@]}"}" | jq -R . | jq -sc 'map(select(. != ""))')
-record " + {duration_s: $duration_s, tools: $tools, notes: $notes_json}" >"$dir/report.json"
+alert_meta=$(jq -c 'if . == null then null else {probe, severity, ts, checks: ([.findings[].check] | unique)} end' <<<"$alert_json")
+record " + {duration_s: $duration_s, tools: $tools, notes: $notes_json, mode: \"$mode\", alert: $alert_meta,
+           recommendations: $(jq -c '[.[] | .ref] | map(select(. != ""))' <<<"$recs_out"),
+           new_recommendations: $(jq -c 'map(.id)' <<<"$new_recs")}" >"$dir/report.json"
 
 # 7. email, every run
 month=${run_id:0:6}
 read -r month_cost month_runs < <(awk -F, -v m="$month" 'NR>1 && substr($1,1,6)==m {s+=$3; n++} END {printf "%.2f %d\n", s, n}' "$ledger")
 STATUS=$(tr a-z A-Z <<<"$status")
 subject="[overlord] $STATUS - $(head -c 80 <<<"$summary" | tr '\n' ' ')"
+[ "$mode" = alert ] && subject="[overlord] ALERT $STATUS - $(head -c 80 <<<"$summary" | tr '\n' ' ')"
 mail_to=${OVERLORD_MAIL_TO:-jaytcornell@gmail.com}
 {
     echo "From: overlord <$mail_to>"
@@ -155,6 +224,11 @@ mail_to=${OVERLORD_MAIL_TO:-jaytcornell@gmail.com}
     echo "Content-Transfer-Encoding: 8bit"
     echo
     printf '%s\n\n' "$report_md"
+    if [ "$new_recs" != '[]' ]; then
+        echo "New recommendations (overlord-rec.py accept|reject <id>):"
+        jq -r '.[] | "- \(.id) [\(.kind), \(.target_repo)\(if .frequency != "" then ", every \(.frequency)" else "" end)] \(.title)\n  Why: \(.why)\n  Check: \(.check)"' <<<"$new_recs"
+        echo
+    fi
     for n in "${notes[@]+"${notes[@]}"}"; do echo "Note: $n"; done
     printf 'Cost this run $%.3f · this month $%s (%s runs)\n' "$cost" "$month_cost" "$month_runs"
     [ -n "${OVERLORD_SITE_URL:-}" ] && echo "$OVERLORD_SITE_URL"

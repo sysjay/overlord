@@ -34,6 +34,9 @@ FTP_LOG=/var/log/vsftpd.log    # vsftpd's own format; times are UTC (use_localti
 VIDEO_DIR=/home/sysjay/projects/cookie-cam/data/videos
 FTP_STALE_HOURS=24   # the camera only uploads on motion
 FTP_BACKLOG_MIN=30   # ingest normally takes an upload within a minute
+# probes (Ticket 03): registry, and the alerter's record of alerts sent
+PROBE_REGISTRY=/usr/local/lib/overlord/probes/registry.json
+ALERTS_LOG=/home/sysai/runs/alerts.jsonl
 
 here=$(dirname "$(readlink -f "$0")")
 if [ -x "$here/overlord-redact" ]; then REDACT="$here/overlord-redact"
@@ -313,6 +316,42 @@ sec_ftp() {
     return 0
 }
 
+# each probe in the registry: last run, stale or not, last 24 h by severity,
+# its findings deduplicated (count, last seen), alerts sent. Summaries only.
+sec_probes() {
+    local reg=$PROBE_REGISTRY now name iv log
+    [ -r "$reg" ] || reg=$here/../probes/registry.json
+    [ -r "$reg" ] || { echo "no probes installed yet (no registry at $PROBE_REGISTRY)"; return 0; }
+    now=$(date +%s)
+    echo "probes that exist (registry):"
+    jq -r '.[] | "  \(.name): every \(.interval_s) s, alerts \(.route): \(.purpose)"' "$reg"
+    jq -r '.[] | "\(.name) \(.interval_s) \(.log)"' "$reg" | while read -r name iv log; do
+        echo; echo "-- probe $name"
+        if [ ! -r "$log" ]; then echo "  log $log: not found"; echo "  PROBE STALE: $name has no log"; continue; fi
+        tail -n 3000 "$log" | jq -sr --argjson now "$now" --argjson iv "$iv" --arg name "$name" '
+            map(. + {e: (.ts | fromdateiso8601? // 0)}) as $all
+            | ($all | map(select(.metrics)) | last) as $l
+            | [$all[] | select(.e >= $now - 86400)] as $d
+            | [$d[] | select(.metrics)] as $runs
+            | if $l == null then "  no runs logged", "  PROBE STALE: \($name) has no runs"
+              else
+                "  last run: \($l.ts) (\(($now - $l.e) / 60 | floor) min ago), severity \($l.severity), \($l.ms) ms, metrics \($l.metrics | tojson)",
+                (if $now - $l.e > 3 * $iv then "  PROBE STALE: \($name) has not run for \(($now - $l.e) / 60 | floor) min" else empty end),
+                "  last 24 h: runs=\($runs | length) ok=\([$runs[] | select(.severity == "ok")] | length) warn=\([$runs[] | select(.severity == "warn")] | length) critical=\([$runs[] | select(.severity == "critical")] | length)",
+                ([$d[] | .e as $e | .findings[]? | {k: "\(.check) \(.severity): \(.detail)", e: $e}]
+                 | group_by(.k) | map({k: .[0].k, n: length, last: (map(.e) | max)})
+                 | sort_by(-.last) | .[:20][]
+                 | "  \(.n)x, last \(.last | todate): \(.k)")
+              end'
+        if [ -r "$ALERTS_LOG" ]; then
+            jq -sr --argjson now "$now" --arg name "$name" '
+                [.[] | select(.probe == $name and ((.ts | fromdateiso8601? // 0) >= $now - 86400))]
+                | "  alerts last 24 h: \(length)", (.[] | "    \(.ts) \(.severity) \(.checks | join(",")): \(.how)\(if .sent then "" else " (EMAIL FAILED)" end)")' \
+                "$ALERTS_LOG" 2>/dev/null
+        else echo "  alerts last 24 h: 0 (no alert log yet)"; fi
+    done
+}
+
 sec_go2rtc() {
     local r
     r=$(curl -s -m 5 http://127.0.0.1:1984/api/streams) || { echo "SECTION FAILED: go2rtc API unreachable"; return 0; }
@@ -349,10 +388,11 @@ section() {
 }
 
 export LEDGER COOKIEPI EXPECTED_UNITS TUNER_IPS HDHR_AC4 OUTBOUND_OK_USERS \
-    FTP_ROOT FTP_CAMERAS FTP_LISTEN FTP_LOG VIDEO_DIR FTP_STALE_HOURS FTP_BACKLOG_MIN
+    FTP_ROOT FTP_CAMERAS FTP_LISTEN FTP_LOG VIDEO_DIR FTP_STALE_HOURS FTP_BACKLOG_MIN \
+    PROBE_REGISTRY ALERTS_LOG here
 export -f have dedupe sec_host sec_systemd sec_journal sec_updates sec_docker \
     sec_ota conn_class conn_by_user tmp_executables sec_security \
-    sec_cookiecam ftp_log_summary sec_ftp sec_go2rtc sec_cookiepi sec_overlord
+    sec_cookiecam ftp_log_summary sec_ftp sec_probes sec_go2rtc sec_cookiepi sec_overlord
 
 {
     echo "overlord facts: uba5, collected $(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -364,6 +404,7 @@ export -f have dedupe sec_host sec_systemd sec_journal sec_updates sec_docker \
     section docker sec_docker
     section ota sec_ota
     section security sec_security
+    section probes sec_probes
     section cookie-cam sec_cookiecam
     section ftp sec_ftp
     section go2rtc sec_go2rtc

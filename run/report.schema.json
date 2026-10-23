@@ -3,8 +3,25 @@
   "properties": {
     "status": {"type": "string", "enum": ["ok", "warn", "problem"]},
     "summary": {"type": "string", "maxLength": 300},
-    "report_md": {"type": "string"}
+    "report_md": {"type": "string"},
+    "recommendations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "ref": {"type": "string", "maxLength": 10},
+          "title": {"type": "string", "maxLength": 100},
+          "kind": {"type": "string", "enum": ["probe", "fix", "ticket"]},
+          "target_repo": {"type": "string", "enum": ["overlord", "cookie-cam", "other"]},
+          "frequency": {"type": "string", "maxLength": 20},
+          "why": {"type": "string", "maxLength": 400},
+          "check": {"type": "string", "maxLength": 400}
+        },
+        "required": ["ref", "title", "kind", "target_repo", "frequency", "why", "check"],
+        "additionalProperties": false
+      }
+    }
   },
-  "required": ["status", "summary", "report_md"],
+  "required": ["status", "summary", "report_md", "recommendations"],
   "additionalProperties": false
 }

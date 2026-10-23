@@ -1,0 +1,8 @@
+[Unit]
+Description=overlord: wake the alerter when a probe spools an alert
+
+[Path]
+DirectoryNotEmpty=/var/lib/overlord/alerts
+
+[Install]
+WantedBy=paths.target

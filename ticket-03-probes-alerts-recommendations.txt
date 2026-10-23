@@ -1,6 +1,6 @@
 Priority: P2
 Status: In progress
-Next action: Jay: review Stage 1; then Claude Code: Stage 2
+Next action: Claude Code: Stage 3 install.sh; then Jay runs it
 Waiting on: Jay
 Updated: 2026-10-23
 
@@ -46,6 +46,15 @@ DECISIONS AFTER STAGE 0 (Jay, 2026-10-23: "yes to all five")
     go to the daily report); outbound users from `ss -e` uids (no -p needed);
     exe_in_tmp counts one finding per user + program; a "(deleted)" program
     outside the temp dirs uses DELETED_EXE_SEVERITY (critical as planned).
+  - Stage 2 (Claude Code, 2026-10-23): the units no longer share
+    LogsDirectory=overlord/probes (systemd would chown it to whichever probe
+    ran last). install.sh makes /var/log/overlord/probes root:overlord-alerts
+    3770 and the spool sysai:overlord-alerts 3770 (setgid + sticky: sysai reads
+    everything, no probe can touch another's files); units get ReadWritePaths.
+  - The alerter records every alert in ~/runs/alerts.jsonl (route, run id,
+    email sent or not); the cap counts alert runs tried since local midnight.
+  - The collector's probes section prints "no probes installed yet" (not
+    SECTION FAILED) without a registry, so Ticket 04 can be installed first.
 
 WHY (planned in claude.ai, 2026-10-22)
   Overlord shouldn't do everything itself. A daily AI read is good at judgement and
