@@ -1,6 +1,6 @@
 Priority: P2
 Status: In progress
-Next action: Jay: review Stage 1; then Claude Code: Stage 2
+Next action: Jay: Stage 3 (install.sh, check the ftp section)
 Waiting on: Jay
 Updated: 2026-10-23
 

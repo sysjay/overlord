@@ -21,12 +21,20 @@ Fixes never happen here. A problem in a report becomes a ticket in the right rep
 
 Settings at the top of `collect/uba5.sh`:
 
-- **Expected services** (`EXPECTED_UNITS`): snap.docker.dockerd, ssh, nginx,
-  php8.1-fpm, overlord-web, cron, ufw. A service that is stopped or not enabled is
+- **Expected services** (`EXPECTED_UNITS`): docker, containerd (docker-ce since
+  cookie-cam Ticket 94), ssh, nginx, php8.1-fpm, overlord-web, cron, ufw, vsftpd.
+  A service that is stopped or not enabled is
   a problem, not just a failed one.
 - **OTA chain:** hdhr-ac4 (muxes AC-4 audio so channel 6 plays) must answer on
   8080 and 5004, and its `HDHR_IP` must match `TUNER_IPS`. The tuner has no DHCP
   reservation yet; if it moves, the report shows where (SiliconDust MACs in ARP).
+- **FTP uploads:** the Back Yard camera uploads clips by FTPS to vsftpd and
+  never retries, so vsftpd downtime loses clips. The `ftp` section checks that
+  vsftpd listens on `FTP_LISTEN` and keeps its boot guard (waits for the
+  network, restarts on failure), counts the last 24 h of vsftpd's log, and
+  reports the newest stored clip per camera in `FTP_CAMERAS` (warn after
+  `FTP_STALE_HOURS`), uploads stuck waiting for Cookie-Cam's ingest, and
+  rejected clips. More FTP cameras: extend `FTP_CAMERAS`.
 - **Intrusion signs**, added after Plex was compromised on 2026-10-17 and retired
   on 2026-10-22: the top CPU processes, outside connections made by any user not
   in `OUTBOUND_OK_USERS` (root, sysjay, sysai), executables owned by system

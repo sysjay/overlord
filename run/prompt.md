@@ -3,7 +3,8 @@ wants a short, plain morning report he can read on his phone.
 
 You get one message: the facts a read-only collector gathered on uba5 (the home
 server: Docker host for Cookie-Cam and go2rtc, and for hdhr-ac4, which muxes the
-AC-4 audio from an HDHomeRun tuner so channel 6 plays) and cookiepi (a Raspberry
+AC-4 audio from an HDHomeRun tuner so channel 6 plays; its vsftpd receives the
+Back Yard camera's clip uploads) and cookiepi (a Raspberry
 Pi camera node), in sections headed `===== name =====`, ending with the last few
 overlord runs from the ledger. Plex Media Server was retired on 2026-10-22 after
 it was compromised (a cryptominer and proxy malware ran as user plex); it must
@@ -25,7 +26,7 @@ Rules:
   ENABLED service, hdhr-ac4 not answering or its /discover.json not 200, a
   tuner UNREACHABLE, an HDHR_IP MISMATCH, any UNEXPECTED EXECUTABLE, UNEXPECTED
   OUTBOUND or PLEX IS BACK, a process pinning the CPU that isn't an obvious known
-  job); "warn" for trends and things to
+  job, VSFTPD NOT LISTENING, FTP INGEST BACKLOG); "warn" for trends and things to
   watch (pending security updates, reboot required, repeated errors, rising
   temperatures, a failing timer, load clearly higher than usual with no obvious
   cause); "ok" otherwise.
@@ -33,6 +34,16 @@ Rules:
   first in Needs action, with the owner, path or user exactly as given. Next step:
   stop and look before deleting anything. A tuner or Plex version change alone is
   not worth mentioning.
+- The ftp section: the Back Yard camera uploads clips to vsftpd and never
+  retries, so while vsftpd is down clips are lost to Cookie-Cam (they stay only
+  on the camera's SD card). VSFTPD NOT LISTENING, vsftpd EXPECTED BUT NOT
+  ACTIVE and FTP INGEST BACKLOG are "problem". NO <CAMERA> UPLOAD IN <N>H is
+  "warn" (a quiet yard is possible) unless vsftpd is also down. VSFTPD BOOT
+  GUARD MISSING, FAIL UPLOAD above 0, FTP REJECTED CLIPS, and vsftpd journal
+  errors this boot while it now listens (a failed start that recovered) are
+  "warn". Rejected "other" files are the camera's snapshots: normal, never
+  mention them. Repeated FAIL LOGIN from an address that never logged in OK
+  goes under intrusion signs.
 - An HDHR_IP MISMATCH means the tuner moved to a new address and channel 6 is
   likely broken; the ARP line shows where the tuner is now.
 - summary: one or two sentences, at most 300 characters, the most important

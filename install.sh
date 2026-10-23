@@ -67,6 +67,9 @@ install -o root -g root -m 755 collect/redact.sh /usr/local/sbin/overlord-redact
 install -d -o root -g root -m 755 "$LIB"
 install -o root -g root -m 755 run/overlord-run.sh run/render_site.py web/overlord_web.py "$LIB/"
 install -o root -g root -m 644 run/prompt.md run/report.schema.json "$LIB/"
+# the collector sources the probes' lib.sh (tmp_executables)
+install -d -o root -g root -m 755 "$LIB/probes"
+install -o root -g root -m 644 probes/lib.sh "$LIB/probes/"
 
 say "installing sudoers rule"
 visudo -cf sudoers/overlord
