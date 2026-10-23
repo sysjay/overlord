@@ -1,0 +1,32 @@
+[Unit]
+Description=overlord probe: intrusion (read only, no AI)
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=overlord-probe-intrusion
+Group=overlord-probe-intrusion
+SupplementaryGroups=overlord-alerts
+ExecStart=/usr/local/lib/overlord/probes/intrusion.sh
+TimeoutStartSec=60
+UMask=0027
+# PTRACE: read /proc/<pid>/exe of other users' processes; DAC_READ_SEARCH: list
+# directories an attacker locked down in /tmp. DAC_READ_SEARCH can read any
+# file, so ProtectHome and InaccessiblePaths keep every secret out of reach.
+AmbientCapabilities=CAP_SYS_PTRACE CAP_DAC_READ_SEARCH
+CapabilityBoundingSet=CAP_SYS_PTRACE CAP_DAC_READ_SEARCH
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+# /home is already hidden by ProtectHome; "-" keeps the unit starting if
+# /home/sysai is not visible there
+InaccessiblePaths=/etc/shadow /etc/gshadow /etc/sudoers /etc/sudoers.d /root -/home/sysai
+# not DynamicUser or PrivateTmp: the probe must see the real /tmp
+PrivateTmp=no
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+StateDirectory=overlord-probes/intrusion
+LogsDirectory=overlord/probes
+ReadWritePaths=/var/lib/overlord/alerts

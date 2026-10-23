@@ -1,6 +1,6 @@
 Priority: P2
-Status: Waiting
-Next action: Jay: review Stage 0 report and unit file
+Status: In progress
+Next action: Jay: review Stage 1; then Claude Code: Stage 2
 Waiting on: Jay
 Updated: 2026-10-23
 
@@ -15,6 +15,9 @@ FILES
   probes/intrusion.conf             NEW - allowlists (outbound users, CPU jobs, ports)
   systemd/overlord-probe-intrusion.service   NEW
   systemd/overlord-probe-intrusion.timer     NEW - every 2 min
+  probes/ftp.sh                     NEW - the ftp probe (Ticket 04's LATER; Jay 2026-10-23)
+  systemd/overlord-probe-ftp.service         NEW - User=overlord-probe-ftp, no capabilities
+  systemd/overlord-probe-ftp.timer           NEW - every 2 min
   systemd/overlord-alert.path       NEW - wakes the alerter when an alert is spooled
   systemd/overlord-alert.service    NEW - the alerter, User=sysai
   run/overlord-alert.sh             NEW - routes alerts: summarize (default) or direct
@@ -29,6 +32,20 @@ FILES
   README.md                         probes, alerts, recommendations, accounts (why)
   CLAUDE.md                         rules for probes (below) and the new layout rows
   TICKETS.md                        this ticket's row
+
+DECISIONS AFTER STAGE 0 (Jay, 2026-10-23: "yes to all five")
+  - Unit file as reported: InaccessiblePaths uses -/home/sysai (/home is already
+    hidden by ProtectHome); SupplementaryGroups=overlord-alerts; UMask=0027;
+    TimeoutStartSec=60. systemd 249 has every directive.
+  - Listener baseline: TCP by address:port; UDP by port only, ignoring ports
+    >= 32768 (ephemeral; Samba/mDNS also bind per Docker bridge).
+  - Plex is already purged: plex_back is critical from the start, no warn phase.
+  - The ftp probe joins this ticket: vsftpd listening on 10.0.0.33:21, route
+    direct, every 2 min, account overlord-probe-ftp (install.sh creates it too).
+  - Stage 1 choices: only critical findings alert (PROBE_ALERT_MIN; warn ones
+    go to the daily report); outbound users from `ss -e` uids (no -p needed);
+    exe_in_tmp counts one finding per user + program; a "(deleted)" program
+    outside the temp dirs uses DELETED_EXE_SEVERITY (critical as planned).
 
 WHY (planned in claude.ai, 2026-10-22)
   Overlord shouldn't do everything itself. A daily AI read is good at judgement and

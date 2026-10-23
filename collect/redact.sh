@@ -19,6 +19,8 @@ redact() {
         s/\b(Bearer|Basic)\s+[A-Za-z0-9+\/._~=-]{8,}/$1 ***/g;
         # name=value / "name": "value" where the name looks secret
         s/\b([\w.-]*(?:passw(?:or)?d|passwd|_pass|pwd|token|secret|api[_-]?key|apikey|key|psk|credential|auth)\w*)(["\x27]?\s*[=:]\s*["\x27]?)([^\s"\x27,;&}]+)/$1$2***/gi;
+        # command-line options (miners: xmrig --pass, --user wallet)
+        s/(--(?:pass|user))(=|\s+)([^\s"\x27]+)/$1$2***/g;
         # long pure-hex runs (keys, digests)
         s/\b[0-9A-Fa-f]{32,}\b/[HEX REDACTED]/g;
         # long base64-ish runs with mixed case and digits (API keys, tokens);
@@ -42,6 +44,7 @@ selftest() {
         "sk-ant-api03-AbCdEf1234567890GhIjKl1234567890MnOpQr" "qwerty789"
         "dGhpc2lzYmFzaWM6c2VjcmV0" "envpass55" "mqttpw77"
         "Ab3dEf7hIj9kLm1nOp5qRs7tUv9wXy2zAb4c" "Qw8eRt6yUi4oPa2sDf0gHj8kLz6xCv4bNm2q"
+        "minerpw42" "wallet7Q" "rigpass9"
     )
     in=$(cat <<'EOF'
 password=hunter2pass
@@ -62,6 +65,8 @@ REOLINK_PASS=envpass55
 mqtt_password: "mqttpw77"
 cache /var/lib/app/Ab3dEf7hIj9kLm1nOp5qRs7tUv9wXy2zAb4c/data
 blob /Qw8eRt6yUi4oPa2sDf0gHj8kLz6xCv4bNm2q end
+user plex pid 102: xmrig -o stratum+tcp://pool.example.com:3333 --user wallet7Q --pass=minerpw42
+/tmp/x --pass rigpass9
 EOF
 )
     out=$(printf '%s\n' "$in" | redact)

@@ -1,6 +1,6 @@
 Priority: P2
-Status: Waiting
-Next action: Jay: confirm thresholds and _rejected JPG rule
+Status: In progress
+Next action: Jay: review Stage 1; then Claude Code: Stage 2
 Waiting on: Jay
 Updated: 2026-10-23
 
@@ -13,6 +13,18 @@ FILES
   TICKETS.md           this ticket's row
   (collect/redact.sh only if Stage 0 finds something in the vsftpd log that
    needs a new pattern - then stop and ask Jay first, with its --selftest sample.)
+
+STAGE 0 RESULTS AND DECISIONS (Jay, 2026-10-23: "yes to all five")
+  - docker-ce units: docker and containerd (separate, enabled) -> both expected.
+  - vsftpd log: /var/log/vsftpd.log, root 600, weekly rotation to .1 (not
+    compressed). Times are UTC (use_localtime unset). Lines: CONNECT, OK LOGIN,
+    OK UPLOAD, OK MKDIR; user, client address and path only, no passwords:
+    redact.sh unchanged.
+  - Uploads land in FTP_ROOT/<camera>/YYYY/MM/DD/: the backlog check recurses.
+  - The camera also uploads JPG snapshots (~45/day) that ingest moves to
+    _rejected/. Only rejected .mp4 clips count ("FTP REJECTED CLIPS: N" ->
+    warn); other rejected files are an info count.
+  - Thresholds confirmed: FTP_STALE_HOURS=24, backlog over 30 min.
 
 WHY (planned in claude.ai, 2026-10-23)
   - Cookie-Cam's Back Yard camera (Reolink Argus Eco) records on its own PIR and

@@ -1,0 +1,25 @@
+[Unit]
+Description=overlord probe: ftp (vsftpd listening; read only, no AI)
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=overlord-probe-ftp
+Group=overlord-probe-ftp
+SupplementaryGroups=overlord-alerts
+ExecStart=/usr/local/lib/overlord/probes/ftp.sh
+TimeoutStartSec=60
+UMask=0027
+# needs no capabilities: ss and systemctl is-active work unprivileged
+CapabilityBoundingSet=
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+StateDirectory=overlord-probes/ftp
+LogsDirectory=overlord/probes
+ReadWritePaths=/var/lib/overlord/alerts

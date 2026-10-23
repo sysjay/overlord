@@ -6,7 +6,7 @@
 # Installed as /usr/local/sbin/overlord-collect-uba5.
 set -u
 export LC_ALL=C
-PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin  # docker is a snap on uba5
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin  # docker is docker-ce (/usr/bin) since cookie-cam Ticket 94
 
 TOTAL_CAP=200000     # bytes, whole output
 SECTION_CAP=30000    # bytes, per section
@@ -14,17 +14,34 @@ SECTION_TIMEOUT=60   # seconds, per section
 LEDGER=/home/sysai/runs/ledger.csv
 COOKIEPI=http://10.0.0.133/status
 # units that must always be running (Jay, 2026-10-22); Plex is retired, not expected
-EXPECTED_UNITS="snap.docker.dockerd ssh nginx php8.1-fpm overlord-web cron ufw"
+# (Jay, 2026-10-23: Docker is docker-ce since cookie-cam Ticket 94; vsftpd receives
+# the Back Yard uploads)
+EXPECTED_UNITS="docker containerd ssh nginx php8.1-fpm overlord-web cron ufw vsftpd"
 # HDHomeRun tuner(s). TODO: no DHCP reservation yet, so the address can move
 # (it did: .239 -> .244); the ota section lists SiliconDust MACs seen in ARP.
 TUNER_IPS="10.0.0.244"
 HDHR_AC4=hdhr-ac4    # container that muxes AC-4 audio so channel 6 plays
 # users allowed to hold connections to outside (non-LAN) addresses
 OUTBOUND_OK_USERS="root sysjay sysai"
+# FTP cameras (cookie-cam Ticket 91): vsftpd receives their uploads in
+# FTP_ROOT/<camera>/YYYY/MM/DD/; cookie-cam's ftp_ingest stores the clips in
+# VIDEO_DIR as <camera>_<UTC>_ftp.mp4 (keeping the upload's mtime) and moves
+# anything else (the camera's JPG snapshots) to FTP_ROOT/<camera>/_rejected/.
+FTP_ROOT=/home/ftp/reolink
+FTP_CAMERAS="backyard"
+FTP_LISTEN=10.0.0.33:21
+FTP_LOG=/var/log/vsftpd.log    # vsftpd's own format; times are UTC (use_localtime unset)
+VIDEO_DIR=/home/sysjay/projects/cookie-cam/data/videos
+FTP_STALE_HOURS=24   # the camera only uploads on motion
+FTP_BACKLOG_MIN=30   # ingest normally takes an upload within a minute
 
 here=$(dirname "$(readlink -f "$0")")
 if [ -x "$here/overlord-redact" ]; then REDACT="$here/overlord-redact"
 else REDACT="$here/redact.sh"; fi
+
+# shared with the probes: tmp_executables
+if [ -r /usr/local/lib/overlord/probes/lib.sh ]; then . /usr/local/lib/overlord/probes/lib.sh
+else . "$here/../probes/lib.sh"; fi
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
@@ -189,10 +206,7 @@ sec_security() {
           done | conn_by_user "$OUTBOUND_OK_USERS"
     echo
     echo "executables in /tmp, /var/tmp, /dev/shm owned by system accounts:"
-    find /tmp /var/tmp /dev/shm -xdev -maxdepth 4 -type f -perm /111 \
-        \( \( -uid -1000 ! -uid 0 \) -o -uid 65534 \) \
-        -printf 'UNEXPECTED EXECUTABLE: %u %s bytes %TY-%Tm-%Td %TH:%TM %p\n' 2>/dev/null \
-        | head -30 | grep . || echo "none"
+    tmp_executables | sed 's/^/UNEXPECTED EXECUTABLE: /' | grep . || echo "none"
     echo
     # Plex was retired after a compromise (2026-10-22); it must stay gone
     st=$(dpkg-query -W -f='${db:Status-Status}' plexmediaserver 2>/dev/null)
@@ -212,6 +226,91 @@ sec_cookiecam() {
          cameras: [.cameras[]? | {id, name, recording: (.recording != null),
                                   trigger: .recording.trigger_source, stall}]}' <<<"$s" 2>/dev/null \
         || echo "SECTION FAILED: /api/status is not JSON"
+}
+
+# stdin: vsftpd log lines (own format, UTC times); $1: oldest epoch to count.
+# Counts only; a file name is reduced to its camera folder.
+ftp_log_summary() {
+    TZ=UTC awk -v since="$1" '
+        BEGIN { split("Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec", m, " ")
+                for (i in m) mon[m[i]] = i }
+        function cam() { return match($0, /", "\/[^\/"]+\//) ? substr($0, RSTART + 5, RLENGTH - 6) : "(top level)" }
+        {
+            split($4, t, ":")
+            ts = mktime($5 " " mon[$2] " " $3 " " t[1] " " t[2] " " t[3])
+            if (ts < since) next
+            client = match($0, /Client "[^"]*"/) ? substr($0, RSTART + 8, RLENGTH - 9) : "?"
+            if (/ OK UPLOAD: /) {
+                c = cam(); if (/\.mp4", /) { clips[c]++; if (ts > last) { last = ts; lastcam = c } } else other[c]++; cams[c] = 1
+            }
+            else if (/ FAIL UPLOAD: /) { c = cam(); fu[c]++; cams[c] = 1; nfu++ }
+            else if (/ FAIL LOGIN: /) { fl[client]++; nfl++ }
+            else if (/ OK LOGIN: /) { ok[client]++; nok++ }
+            else if (/ CONNECT: /) nconn++
+        }
+        END {
+            printf "last 24 h: CONNECT=%d OK LOGIN=%d FAIL LOGIN=%d FAIL UPLOAD=%d\n", nconn, nok, nfl, nfu
+            for (c in cams) printf "  %s: OK UPLOAD clips=%d other=%d, FAIL UPLOAD=%d\n", c, clips[c], other[c], fu[c]
+            if (last) print "  last OK UPLOAD of a clip: " strftime("%Y-%m-%d %H:%M UTC", last, 1) " (" lastcam ")"
+            else print "  last OK UPLOAD of a clip: none in 24 h"
+            for (a in ok) printf "  OK LOGIN from %s: %d\n", a, ok[a]
+            for (a in fl) printf "  FAIL LOGIN from %s: %d%s\n", a, fl[a], (a in ok) ? "" : " (address never logged in OK)"
+        }'
+}
+
+sec_ftp() {
+    local dp after rs nr lines f now cam d newest n24 w oldest rj rjo
+    if ss -Hltn 2>/dev/null | awk -v l="$FTP_LISTEN" '$4 == l { f = 1 } END { exit !f }'; then
+        echo "vsftpd listening on $FTP_LISTEN: yes"
+    else echo "VSFTPD NOT LISTENING on $FTP_LISTEN"; fi
+    dp=$(systemctl show vsftpd -p DropInPaths --value 2>/dev/null)
+    after=$(systemctl show vsftpd -p After --value 2>/dev/null)
+    rs=$(systemctl show vsftpd -p Restart --value 2>/dev/null)
+    nr=$(systemctl show vsftpd -p NRestarts --value 2>/dev/null)
+    echo "boot guard: drop-ins=${dp:-none} restart=${rs:-?} restarts=${nr:-?}"
+    case " $after " in *" network-online.target "*) ;; *) dp= ;; esac
+    if [ -z "$dp" ] || [ "$rs" != on-failure ]; then
+        echo "VSFTPD BOOT GUARD MISSING (needs After=network-online.target and Restart=on-failure)"
+    fi
+    lines=$(journalctl -b -u vsftpd -p warning -o cat --no-pager -q 2>/dev/null)
+    echo "vsftpd journal, warning or worse this boot: $(grep -c . <<<"$lines")"
+    if [ -n "$lines" ]; then tail -n 20 <<<"$lines" | dedupe | head -3; fi
+    echo
+    if [ -r "$FTP_LOG" ]; then
+        echo "vsftpd log $FTP_LOG:"
+        for f in "$FTP_LOG.1" "$FTP_LOG"; do [ -r "$f" ] && cat "$f"; done \
+            | ftp_log_summary "$(( $(date +%s) - 86400 ))"
+    else echo "vsftpd log $FTP_LOG: not found"; fi
+    now=$(date +%s)
+    for cam in $FTP_CAMERAS; do
+        echo
+        echo "camera $cam:"
+        if [ -d "$VIDEO_DIR" ]; then
+            newest=$(find "$VIDEO_DIR" -maxdepth 1 -name "${cam}_*_ftp.mp4" -printf '%T@\n' 2>/dev/null \
+                | sort -n | tail -1); newest=${newest%.*}
+            n24=$(find "$VIDEO_DIR" -maxdepth 1 -name "${cam}_*_ftp.mp4" -mmin -1440 2>/dev/null | wc -l)
+            if [ -n "$newest" ]; then
+                echo "  newest stored clip: $(date -d "@$newest" '+%Y-%m-%d %H:%M %Z'), age $(( (now - newest) / 3600 )) h; clips stored in last 24 h: $n24"
+            else echo "  newest stored clip: none"; fi
+            if [ -z "$newest" ] || [ $(( now - newest )) -gt $(( FTP_STALE_HOURS * 3600 )) ]; then
+                echo "  NO ${cam^^} UPLOAD IN ${FTP_STALE_HOURS}H"
+            fi
+        else echo "  video dir $VIDEO_DIR: not found"; fi
+        d=$FTP_ROOT/$cam
+        if [ -d "$d" ]; then
+            w=$(find "$d" -path "$d/_rejected" -prune -o -type f -printf '%T@\n' 2>/dev/null | sort -n)
+            oldest=$(head -1 <<<"$w"); oldest=${oldest%.*}
+            echo "  uploads waiting for ingest: $(grep -c . <<<"$w")"
+            if [ -n "$oldest" ] && [ $(( now - oldest )) -gt $(( FTP_BACKLOG_MIN * 60 )) ]; then
+                echo "  FTP INGEST BACKLOG: $(awk -v c=$(( now - FTP_BACKLOG_MIN * 60 )) '$1 < c' <<<"$w" | wc -l) waiting over ${FTP_BACKLOG_MIN} min, oldest $(( (now - oldest) / 60 )) min"
+            fi
+            rj=$(find "$d/_rejected" -type f -name '*.mp4' -mmin -1440 2>/dev/null | wc -l)
+            rjo=$(find "$d/_rejected" -type f ! -name '*.mp4' -mmin -1440 2>/dev/null | wc -l)
+            echo "  rejected in last 24 h: clips=$rj other=$rjo (other = the camera's snapshots, expected)"
+            [ "$rj" -gt 0 ] && echo "  FTP REJECTED CLIPS: $rj"
+        else echo "  upload dir $d: not found"; fi
+    done
+    return 0
 }
 
 sec_go2rtc() {
@@ -249,10 +348,11 @@ section() {
     echo
 }
 
-export LEDGER COOKIEPI EXPECTED_UNITS TUNER_IPS HDHR_AC4 OUTBOUND_OK_USERS
+export LEDGER COOKIEPI EXPECTED_UNITS TUNER_IPS HDHR_AC4 OUTBOUND_OK_USERS \
+    FTP_ROOT FTP_CAMERAS FTP_LISTEN FTP_LOG VIDEO_DIR FTP_STALE_HOURS FTP_BACKLOG_MIN
 export -f have dedupe sec_host sec_systemd sec_journal sec_updates sec_docker \
-    sec_ota conn_class conn_by_user sec_security \
-    sec_cookiecam sec_go2rtc sec_cookiepi sec_overlord
+    sec_ota conn_class conn_by_user tmp_executables sec_security \
+    sec_cookiecam ftp_log_summary sec_ftp sec_go2rtc sec_cookiepi sec_overlord
 
 {
     echo "overlord facts: uba5, collected $(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -265,6 +365,7 @@ export -f have dedupe sec_host sec_systemd sec_journal sec_updates sec_docker \
     section ota sec_ota
     section security sec_security
     section cookie-cam sec_cookiecam
+    section ftp sec_ftp
     section go2rtc sec_go2rtc
     section cookiepi sec_cookiepi
     section overlord sec_overlord

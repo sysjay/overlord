@@ -1,0 +1,18 @@
+[
+  {
+    "name": "intrusion",
+    "interval_s": 120,
+    "account": "overlord-probe-intrusion",
+    "route": "summarize",
+    "log": "/var/log/overlord/probes/intrusion.jsonl",
+    "purpose": "Signs of a compromise like Plex's (2026-10-22): programs run from temp dirs, miners, executables dropped in /tmp, unexpected outbound connections, Plex back, CPU hogs, new listening ports."
+  },
+  {
+    "name": "ftp",
+    "interval_s": 120,
+    "account": "overlord-probe-ftp",
+    "route": "direct",
+    "log": "/var/log/overlord/probes/ftp.jsonl",
+    "purpose": "vsftpd is listening for the Back Yard camera's uploads; the camera never retries, so downtime loses clips (2026-10-23)."
+  }
+]

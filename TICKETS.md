@@ -5,5 +5,5 @@ status header changes.
 
 | # | Ticket | Priority | Status | Next action | Waiting on | Updated |
 |---|---|---|---|---|---|---|
-| 03 | [probes-alerts-recommendations](ticket-03-probes-alerts-recommendations.txt) | P2 | Waiting | Jay: review Stage 0 report and unit file | Jay | 2026-10-23 |
-| 04 | [vsftpd-ftp-uploads](ticket-04-vsftpd-ftp-uploads.txt) | P2 | Waiting | Jay: confirm thresholds and _rejected JPG rule | Jay | 2026-10-23 |
+| 03 | [probes-alerts-recommendations](ticket-03-probes-alerts-recommendations.txt) | P2 | In progress | Jay: review Stage 1; then Claude Code: Stage 2 | Jay | 2026-10-23 |
+| 04 | [vsftpd-ftp-uploads](ticket-04-vsftpd-ftp-uploads.txt) | P2 | In progress | Jay: review Stage 1; then Claude Code: Stage 2 | Jay | 2026-10-23 |
