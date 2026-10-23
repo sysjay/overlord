@@ -30,7 +30,7 @@ OUTBOUND_OK_USERS="root sysjay sysai"
 FTP_ROOT=/home/ftp/reolink
 FTP_CAMERAS="backyard"
 FTP_LISTEN=10.0.0.33:21
-FTP_LOG=/var/log/vsftpd.log    # vsftpd's own format; times are UTC (use_localtime unset)
+FTP_LOG=/var/log/vsftpd.log    # vsftpd's own format; times are local (Ubuntu's build)
 VIDEO_DIR=/home/sysjay/projects/cookie-cam/data/videos
 FTP_STALE_HOURS=24   # the camera only uploads on motion
 FTP_BACKLOG_MIN=30   # ingest normally takes an upload within a minute
@@ -231,10 +231,10 @@ sec_cookiecam() {
         || echo "SECTION FAILED: /api/status is not JSON"
 }
 
-# stdin: vsftpd log lines (own format, UTC times); $1: oldest epoch to count.
+# stdin: vsftpd log lines (own format, local times); $1: oldest epoch to count.
 # Counts only; a file name is reduced to its camera folder.
 ftp_log_summary() {
-    TZ=UTC awk -v since="$1" '
+    awk -v since="$1" '
         BEGIN { split("Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec", m, " ")
                 for (i in m) mon[m[i]] = i }
         function cam() { return match($0, /", "\/[^\/"]+\//) ? substr($0, RSTART + 5, RLENGTH - 6) : "(top level)" }
@@ -254,7 +254,7 @@ ftp_log_summary() {
         END {
             printf "last 24 h: CONNECT=%d OK LOGIN=%d FAIL LOGIN=%d FAIL UPLOAD=%d\n", nconn, nok, nfl, nfu
             for (c in cams) printf "  %s: OK UPLOAD clips=%d other=%d, FAIL UPLOAD=%d\n", c, clips[c], other[c], fu[c]
-            if (last) print "  last OK UPLOAD of a clip: " strftime("%Y-%m-%d %H:%M UTC", last, 1) " (" lastcam ")"
+            if (last) print "  last OK UPLOAD of a clip: " strftime("%Y-%m-%d %H:%M %Z", last) " (" lastcam ")"
             else print "  last OK UPLOAD of a clip: none in 24 h"
             for (a in ok) printf "  OK LOGIN from %s: %d\n", a, ok[a]
             for (a in fl) printf "  FAIL LOGIN from %s: %d%s\n", a, fl[a], (a in ok) ? "" : " (address never logged in OK)"

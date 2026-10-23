@@ -1,6 +1,6 @@
 Priority: P2
 Status: In progress
-Next action: Jay: Stage 3 (install.sh, check the ftp section)
+Next action: Jay: rerun install.sh (log time fix); then next morning's report
 Waiting on: Jay
 Updated: 2026-10-23
 
@@ -17,7 +17,7 @@ FILES
 STAGE 0 RESULTS AND DECISIONS (Jay, 2026-10-23: "yes to all five")
   - docker-ce units: docker and containerd (separate, enabled) -> both expected.
   - vsftpd log: /var/log/vsftpd.log, root 600, weekly rotation to .1 (not
-    compressed). Times are UTC (use_localtime unset). Lines: CONNECT, OK LOGIN,
+    compressed). Times are local (Ubuntu; first read as UTC, fixed in Stage 3). Lines: CONNECT, OK LOGIN,
     OK UPLOAD, OK MKDIR; user, client address and path only, no passwords:
     redact.sh unchanged.
   - Uploads land in FTP_ROOT/<camera>/YYYY/MM/DD/: the backlog check recurses.

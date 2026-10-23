@@ -1,6 +1,6 @@
 Priority: P2
 Status: In progress
-Next action: Claude Code: Stage 3 install.sh; then Jay runs it
+Next action: Jay: Stage 3 (sudo ./install.sh, checks 1-4)
 Waiting on: Jay
 Updated: 2026-10-23
 
