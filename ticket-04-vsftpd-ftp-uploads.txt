@@ -1,7 +1,7 @@
 Priority: P2
-Status: Not started
-Next action: Claude Code: Stage 0 (read only)
-Waiting on: -
+Status: Waiting
+Next action: Jay: vsftpd log shapes + confirm thresholds
+Waiting on: Jay
 Updated: 2026-10-23
 
 TICKET-04: Watch vsftpd and the Back Yard FTP uploads; fix the expected Docker unit

@@ -1,8 +1,8 @@
 Priority: P2
-Status: Not started
-Next action: Claude Code: Stage 0 (read only)
-Waiting on: -
-Updated: 2026-10-22
+Status: Waiting
+Next action: Jay: review Stage 0 report and unit file
+Waiting on: Jay
+Updated: 2026-10-23
 
 TICKET-03: Probes (frequent, no-AI checks), alerts routed through overlord, and
 overlord's recommendations - first probe: intrusion
