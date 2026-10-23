@@ -1,6 +1,6 @@
 Priority: P2
 Status: Waiting
-Next action: Jay: vsftpd log shapes + confirm thresholds
+Next action: Jay: confirm thresholds and _rejected JPG rule
 Waiting on: Jay
 Updated: 2026-10-23
 
